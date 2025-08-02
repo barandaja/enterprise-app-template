@@ -1,0 +1,190 @@
+version: '3.8'
+
+# Event-driven architecture infrastructure
+# Includes Kafka, Zookeeper, and Kafka UI for development
+
+services:
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: enterprise_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - backend_network
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Kafka broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: enterprise_kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168  # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - backend_network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Kafka UI for development
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: enterprise_kafka_ui
+    depends_on:
+      - kafka
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_READONLY: "false"
+    networks:
+      - backend_network
+      - frontend_network
+    profiles: ["tools"]
+    restart: unless-stopped
+
+  # Schema Registry (optional, for Avro/Protobuf schemas)
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: enterprise_schema_registry
+    depends_on:
+      - kafka
+    ports:
+      - "8091:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - backend_network
+    profiles: ["schema"]
+    restart: unless-stopped
+
+  # Event Store Database (dedicated PostgreSQL for event sourcing)
+  event-store-db:
+    image: postgres:15-alpine
+    container_name: enterprise_event_store
+    environment:
+      POSTGRES_DB: event_store
+      POSTGRES_USER: event_user
+      POSTGRES_PASSWORD: ${EVENT_STORE_PASSWORD:-event_pass}
+    ports:
+      - "5433:5432"
+    volumes:
+      - event_store_data:/var/lib/postgresql/data
+      - ./scripts/init-event-store.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - database_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U event_user -d event_store"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["event-store"]
+    restart: unless-stopped
+
+  # RabbitMQ (alternative to Kafka)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: enterprise_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-admin123}
+      RABBITMQ_DEFAULT_VHOST: enterprise
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./config/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    networks:
+      - backend_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["rabbitmq"]
+    restart: unless-stopped
+
+  # Debezium for Change Data Capture (optional)
+  debezium:
+    image: debezium/connect:2.4
+    container_name: enterprise_debezium
+    depends_on:
+      - kafka
+      - postgres
+    ports:
+      - "8093:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: debezium-cluster
+      CONFIG_STORAGE_TOPIC: debezium-configs
+      OFFSET_STORAGE_TOPIC: debezium-offsets
+      STATUS_STORAGE_TOPIC: debezium-status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+    networks:
+      - backend_network
+      - database_network
+    profiles: ["cdc"]
+    restart: unless-stopped
+
+volumes:
+  zookeeper_data:
+    driver: local
+  zookeeper_logs:
+    driver: local
+  kafka_data:
+    driver: local
+  event_store_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  backend_network:
+    external: true
+    name: enterprise_backend
+  database_network:
+    external: true
+    name: enterprise_database
+  frontend_network:
+    external: true
+    name: enterprise_frontend

@@ -1,0 +1,530 @@
+version: '3.8'
+
+# Security-hardened Docker Compose configuration
+# Addresses all security and architectural concerns
+
+services:
+  # Database Services - Isolated Network
+  postgres:
+    image: postgres:15-alpine
+    container_name: enterprise_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_MULTIPLE_DATABASES}
+      # Security: Enable SSL
+      POSTGRES_SSLMODE: require
+      # Performance tuning
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+    ports:
+      - "127.0.0.1:5432:5432"  # Bind only to localhost
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:rw
+      - ./scripts/init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh:ro
+      - ./config/postgres/server.crt:/var/lib/postgresql/server.crt:ro
+      - ./config/postgres/server.key:/var/lib/postgresql/server.key:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - database_network
+    # Security: Run as non-root user
+    user: "999:999"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPU_LIMIT:-1.0}"
+          memory: "${POSTGRES_MEMORY_LIMIT:-1g}"
+        reservations:
+          cpus: "0.25"
+          memory: "256m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # PostgreSQL needs write access
+    tmpfs:
+      - /tmp
+      - /run
+
+  # Redis with authentication - Isolated Network
+  redis:
+    image: redis:7-alpine
+    container_name: enterprise_redis
+    ports:
+      - "127.0.0.1:6379:6379"  # Bind only to localhost
+    volumes:
+      - redis_data:/data:rw
+      - ./config/redis/redis.secure.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend_network
+      - database_network
+    # Security: Run as non-root user
+    user: "999:999"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-0.5}"
+          memory: "${REDIS_MEMORY_LIMIT:-512m}"
+        reservations:
+          cpus: "0.1"
+          memory: "128m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Auth Service - Backend Network Only
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile.secure
+      target: production
+      args:
+        - USER_ID=1000
+        - GROUP_ID=1000
+    container_name: enterprise_auth_service
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/auth_db?sslmode=require
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # Security settings
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    expose:
+      - "8000"  # Internal port only
+    volumes:
+      # Read-only mounts
+      - ./services/auth-service/src:/app/src:ro
+      - ./services/auth-service/alembic:/app/alembic:ro
+      - ./services/auth-service/alembic.ini:/app/alembic.ini:ro
+      # Writable volumes for runtime
+      - auth_logs:/app/logs:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - backend_network
+    # Security: Run as non-root user
+    user: "1000:1000"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "${SERVICE_CPU_LIMIT:-0.5}"
+          memory: "${SERVICE_MEMORY_LIMIT:-512m}"
+        reservations:
+          cpus: "0.1"
+          memory: "128m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # User Service - Backend Network Only
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile.secure
+      target: production
+      args:
+        - USER_ID=1001
+        - GROUP_ID=1001
+    container_name: enterprise_user_service
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/user_db?sslmode=require
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      AUTH_SERVICE_URL: http://auth-service:8000
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # Security settings
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    expose:
+      - "8000"  # Internal port only
+    volumes:
+      # Read-only mounts
+      - ./services/user-service/src:/app/src:ro
+      - ./services/user-service/alembic:/app/alembic:ro
+      # Writable volumes for runtime
+      - user_logs:/app/logs:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - backend_network
+    # Security: Run as non-root user
+    user: "1001:1001"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "${SERVICE_CPU_LIMIT:-0.5}"
+          memory: "${SERVICE_MEMORY_LIMIT:-512m}"
+        reservations:
+          cpus: "0.1"
+          memory: "128m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # API Gateway - Bridge between Frontend and Backend
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile.secure
+      target: production
+      args:
+        - USER_ID=1002
+        - GROUP_ID=1002
+    container_name: enterprise_api_gateway
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/gateway_db?sslmode=require
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/2
+      AUTH_SERVICE_URL: http://auth-service:8000
+      USER_SERVICE_URL: http://user-service:8000
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      CIRCUIT_BREAKER_ENABLED: ${CIRCUIT_BREAKER_ENABLED:-true}
+      # Security settings
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    expose:
+      - "8000"  # Internal port only
+    volumes:
+      # Read-only mounts
+      - ./services/api-gateway/src:/app/src:ro
+      - ./services/api-gateway/alembic:/app/alembic:ro
+      # Writable volumes for runtime
+      - gateway_logs:/app/logs:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - frontend_network
+      - backend_network
+    # Security: Run as non-root user
+    user: "1002:1002"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "${SERVICE_CPU_LIMIT:-0.5}"
+          memory: "${SERVICE_MEMORY_LIMIT:-512m}"
+        reservations:
+          cpus: "0.1"
+          memory: "128m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Frontend - DMZ Network
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.secure
+      target: production
+      args:
+        - USER_ID=1003
+        - GROUP_ID=1003
+    container_name: enterprise_frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost/api}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost/ws}
+      NODE_ENV: ${NODE_ENV:-production}
+      # Security headers
+      ENABLE_CSP: "true"
+      ENABLE_HSTS: "true"
+    expose:
+      - "5173"  # Internal port only
+    volumes:
+      # All read-only in production
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+    networks:
+      - frontend_network
+    # Security: Run as non-root user
+    user: "1003:1003"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONTEND_CPU_LIMIT:-0.25}"
+          memory: "${FRONTEND_MEMORY_LIMIT:-256m}"
+        reservations:
+          cpus: "0.1"
+          memory: "64m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+
+  # Nginx Reverse Proxy - Edge Network
+  nginx:
+    image: nginx:alpine
+    container_name: enterprise_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx/nginx.secure.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./config/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_cache:/var/cache/nginx:rw
+    depends_on:
+      - frontend
+      - api-gateway
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - frontend_network
+      - edge_network
+    # Security: Run as non-root user
+    user: "101:101"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256m"
+        reservations:
+          cpus: "0.1"
+          memory: "64m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
+    read_only: true
+    tmpfs:
+      - /var/run
+
+  # Database Admin Tool - Admin Network (Isolated)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: enterprise_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: 'True'
+      PGADMIN_CONFIG_SESSION_COOKIE_SECURE: 'True'
+      PGADMIN_CONFIG_SESSION_COOKIE_HTTPONLY: 'True'
+    ports:
+      - "127.0.0.1:5050:80"  # Bind only to localhost
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin:rw
+    depends_on:
+      - postgres
+    profiles: ["tools"]
+    restart: unless-stopped
+    networks:
+      - admin_network
+      - database_network
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "256m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+
+  # Redis Admin Tool - Admin Network (Isolated)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: enterprise_redis_commander
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD}
+      HTTP_USER: admin
+      HTTP_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "127.0.0.1:8081:8081"  # Bind only to localhost
+    depends_on:
+      - redis
+    profiles: ["tools"]
+    restart: unless-stopped
+    networks:
+      - admin_network
+      - database_network
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "128m"
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postgres
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis
+  pgadmin_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/pgadmin
+  # Log volumes
+  auth_logs:
+    driver: local
+  user_logs:
+    driver: local
+  gateway_logs:
+    driver: local
+  nginx_cache:
+    driver: local
+
+networks:
+  # Edge network - Internet facing
+  edge_network:
+    name: enterprise_edge
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:-172.28.4.0/24}
+
+  # Frontend network - DMZ
+  frontend_network:
+    name: enterprise_frontend
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${FRONTEND_SUBNET:-172.28.0.0/24}
+    internal: false
+
+  # Backend services network
+  backend_network:
+    name: enterprise_backend
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BACKEND_SUBNET:-172.28.1.0/24}
+    internal: true  # No external access
+
+  # Database network
+  database_network:
+    name: enterprise_database
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${DATABASE_SUBNET:-172.28.2.0/24}
+    internal: true  # No external access
+
+  # Admin tools network
+  admin_network:
+    name: enterprise_admin
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${ADMIN_SUBNET:-172.28.3.0/24}
+    internal: false  # Needs external access for admin tools
