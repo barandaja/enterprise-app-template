@@ -37,6 +37,80 @@ export interface UpdateProfileData {
   firstName?: string;
   lastName?: string;
   avatar?: string;
+  phone?: string;
+  bio?: string;
+  location?: string;
+}
+
+// Profile settings and preferences types
+export interface ProfileSettings {
+  theme: Theme;
+  language: string;
+  timezone: string;
+  emailNotifications: boolean;
+  pushNotifications: boolean;
+  marketingEmails: boolean;
+  twoFactorEnabled: boolean;
+}
+
+export interface SecuritySettings {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+export interface ChangePasswordData {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+export interface NotificationPreferences {
+  email: {
+    securityAlerts: boolean;
+    accountUpdates: boolean;
+    marketing: boolean;
+    productUpdates: boolean;
+  };
+  push: {
+    securityAlerts: boolean;
+    accountUpdates: boolean;
+    reminders: boolean;
+  };
+  inApp: {
+    securityAlerts: boolean;
+    accountUpdates: boolean;
+    systemNotifications: boolean;
+  };
+}
+
+export interface PrivacySettings {
+  profileVisibility: 'public' | 'private' | 'team';
+  dataProcessing: boolean;
+  analyticsTracking: boolean;
+  advertisingPersonalization: boolean;
+  thirdPartySharing: boolean;
+}
+
+export interface ActiveSession {
+  id: string;
+  deviceName: string;
+  browser: string;
+  os: string;
+  location: string;
+  ipAddress: string;
+  lastActive: string;
+  isCurrent: boolean;
+}
+
+export interface SecurityLog {
+  id: string;
+  event: string;
+  description: string;
+  timestamp: string;
+  ipAddress: string;
+  location: string;
+  success: boolean;
 }
 
 // API Response types

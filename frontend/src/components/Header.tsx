@@ -4,17 +4,15 @@ import {
   Search,
   Menu,
   X,
-  Sun,
-  Moon,
   Settings,
   HelpCircle,
 } from 'lucide-react';
 import { useAuthUser } from '../stores/authStore';
-import { useThemeStore } from '../stores/themeStore';
 import { useUIStore, useUIActions } from '../stores/uiStore';
 import { cn } from '../utils';
 import { UserMenu } from './UserMenu';
 import { NotificationCenter } from './NotificationCenter';
+import { ThemeToggle } from './ThemeToggle';
 import { Button } from './Button';
 import { Input } from './Input';
 
@@ -24,7 +22,6 @@ interface HeaderProps {
 
 export function Header({ className }: HeaderProps) {
   const user = useAuthUser();
-  const { theme, toggleTheme } = useThemeStore();
   const { sidebar } = useUIStore();
   const { toggleSidebar } = useUIActions();
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -39,8 +36,6 @@ export function Header({ className }: HeaderProps) {
       setIsSearchExpanded(false);
     }
   };
-
-  const isDarkMode = theme === 'dark';
 
   return (
     <header 
@@ -158,20 +153,12 @@ export function Header({ className }: HeaderProps) {
           </div>
 
           {/* Theme Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
+          <ThemeToggle 
+            size="md" 
+            variant="subtle"
+            tooltipPosition="bottom"
             data-testid="theme-toggle"
-          >
-            {isDarkMode ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
-          </Button>
+          />
 
           {/* Notifications */}
           <NotificationCenter />

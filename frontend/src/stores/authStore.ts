@@ -13,59 +13,237 @@ import type {
   UpdateProfileData
 } from '../types';
 import type { ApiResponse } from '../services/api/types';
+import type {
+  AsyncState,
+  BaseStore,
+  AsyncStoreMixin,
+  UserId,
+  AccessToken,
+  RefreshToken,
+  SessionId,
+  StoreEventEmitter,
+  EventKey,
+  StoreEvent,
+  createUserId,
+  createAccessToken,
+  createRefreshToken,
+  createSessionId,
+  generateStoreId,
+  STORE_VERSION,
+  isAsyncState,
+  isLoadingState,
+  isSuccessState,
+  isErrorState,
+  assertNonNull,
+  assertAccessToken
+} from './types';
 
-// Extended auth state interface for the store
-interface AuthState {
-  // Core auth state
-  user: User | null;
-  token: string | null;
-  refreshToken: string | null;
-  isAuthenticated: boolean;
+// =============================================================================
+// ADVANCED TYPESCRIPT AUTH STORE TYPES
+// =============================================================================
+
+/**
+ * Enhanced auth state with advanced TypeScript patterns
+ */
+interface AuthState extends BaseStore, AsyncStoreMixin<AuthState> {
+  // Core auth state with branded types
+  readonly user: User | null;
+  readonly userId: UserId | null;
+  readonly token: AccessToken | null;
+  readonly refreshToken: RefreshToken | null;
+  readonly sessionId: SessionId | null;
+  readonly isAuthenticated: boolean;
   
-  // Async state management
-  isLoading: boolean;
-  isInitializing: boolean;
-  error: string | null;
+  // Advanced async state management
+  readonly authState: AsyncState<User>;
+  readonly tokenState: AsyncState<{ accessToken: AccessToken; refreshToken: RefreshToken }>;
+  readonly isInitializing: boolean;
+  
+  // Session management
+  readonly sessionExpiry: number | null;
+  readonly sessionStartTime: number | null;
+  readonly lastActivity: number | null;
+  
+  // Security context
+  readonly securityContext: {
+    readonly ipAddress: string | null;
+    readonly userAgent: string | null;
+    readonly deviceFingerprint: string | null;
+    readonly location: string | null;
+  };
   
   // Token refresh state (managed by TokenManager)
-  isRefreshing: boolean;
+  readonly refreshState: AsyncState<{ accessToken: AccessToken; refreshToken: RefreshToken }>;
 }
 
-// Auth actions interface
-interface AuthActions {
-  // Authentication actions
-  login: (credentials: LoginCredentials) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
-  logout: () => void;
+/**
+ * Enhanced auth actions with advanced TypeScript patterns
+ */
+interface AuthActions extends StoreEventEmitter {
+  // Authentication actions with enhanced type safety
+  readonly login: (credentials: LoginCredentials, options?: LoginOptions) => Promise<AuthResult>;
+  readonly register: (data: RegisterData, options?: RegisterOptions) => Promise<AuthResult>;
+  readonly logout: (options?: LogoutOptions) => Promise<void>;
+  readonly silentLogin: () => Promise<boolean>;
   
-  // Token management (delegated to TokenManager)
-  refreshAccessToken: () => Promise<void>;
-  setTokens: (token: string, refreshToken: string) => Promise<void>;
-  clearTokens: () => Promise<void>;
+  // Token management with branded types
+  readonly refreshAccessToken: () => Promise<TokenRefreshResult>;
+  readonly setTokens: (tokens: TokenPair) => Promise<void>;
+  readonly clearTokens: () => Promise<void>;
+  readonly validateToken: (token: AccessToken) => Promise<boolean>;
   
-  // User management
-  updateProfile: (data: UpdateProfileData) => Promise<void>;
-  setUser: (user: User) => void;
+  // User management with type safety
+  readonly updateProfile: (data: UpdateProfileData) => Promise<User>;
+  readonly setUser: (user: User) => void;
+  readonly getCurrentUser: () => Promise<User | null>;
   
-  // State management
-  clearError: () => void;
-  setLoading: (loading: boolean) => void;
-  initialize: () => Promise<void>;
+  // Session management
+  readonly extendSession: () => Promise<void>;
+  readonly checkSessionValidity: () => boolean;
+  readonly updateLastActivity: () => void;
   
-  // Utility actions
-  isTokenExpired: (token: string) => boolean;
-  scheduleRefresh: () => void;
+  // Security actions
+  readonly updateSecurityContext: (context: Partial<SecurityContext>) => void;
+  readonly reportSecurityEvent: (event: SecurityEvent) => void;
+  
+  // State management with async patterns
+  readonly clearErrors: () => void;
+  readonly initialize: () => Promise<void>;
+  readonly reset: () => void;
+  
+  // Advanced utility actions
+  readonly isTokenExpired: (token: AccessToken) => boolean;
+  readonly getTokenExpiry: (token: AccessToken) => Date | null;
+  readonly hasPendingOperations: () => boolean;
+  readonly waitForInitialization: () => Promise<void>;
+  
+  // Type guards and assertions
+  readonly assertAuthenticated: () => asserts this is AuthStore & { isAuthenticated: true; user: User; userId: UserId };
+  readonly assertTokenValid: (token: AccessToken) => asserts token is AccessToken;
 }
 
-// Combined store type
+// =============================================================================
+// SUPPORTING TYPES FOR ENHANCED AUTH STORE
+// =============================================================================
+
+/**
+ * Login options with advanced configuration
+ */
+interface LoginOptions {
+  readonly rememberMe?: boolean;
+  readonly deviceTrust?: boolean;
+  readonly sessionTimeout?: number;
+  readonly securityContext?: Partial<SecurityContext>;
+}
+
+/**
+ * Register options with enhanced features
+ */
+interface RegisterOptions {
+  readonly autoLogin?: boolean;
+  readonly emailVerification?: boolean;
+  readonly securityContext?: Partial<SecurityContext>;
+}
+
+/**
+ * Logout options with cleanup configuration
+ */
+interface LogoutOptions {
+  readonly everywhere?: boolean;
+  readonly clearCache?: boolean;
+  readonly redirectTo?: string;
+}
+
+/**
+ * Authentication result with detailed information
+ */
+interface AuthResult {
+  readonly success: boolean;
+  readonly user: User | null;
+  readonly tokens: TokenPair | null;
+  readonly sessionId: SessionId | null;
+  readonly expiresAt: Date | null;
+  readonly requiresVerification?: boolean;
+  readonly securityWarnings?: string[];
+}
+
+/**
+ * Token pair with branded types
+ */
+interface TokenPair {
+  readonly accessToken: AccessToken;
+  readonly refreshToken: RefreshToken;
+}
+
+/**
+ * Token refresh result with enhanced information
+ */
+interface TokenRefreshResult {
+  readonly success: boolean;
+  readonly tokens: TokenPair | null;
+  readonly expiresAt: Date | null;
+  readonly error?: Error;
+}
+
+/**
+ * Security context for enhanced security tracking
+ */
+interface SecurityContext {
+  readonly ipAddress: string;
+  readonly userAgent: string;
+  readonly deviceFingerprint: string;
+  readonly location: string;
+  readonly timestamp: number;
+}
+
+/**
+ * Security event for audit logging
+ */
+interface SecurityEvent {
+  readonly type: SecurityEventType;
+  readonly severity: SecuritySeverity;
+  readonly message: string;
+  readonly context?: Partial<SecurityContext>;
+  readonly userId?: UserId;
+  readonly sessionId?: SessionId;
+}
+
+/**
+ * Combined auth store type with advanced TypeScript patterns
+ */
 type AuthStore = AuthState & AuthActions;
 
-// Token payload interface for JWT decoding
+/**
+ * Authenticated auth store type guard
+ */
+type AuthenticatedAuthStore = AuthStore & {
+  readonly isAuthenticated: true;
+  readonly user: User;
+  readonly userId: UserId;
+  readonly token: AccessToken;
+  readonly sessionId: SessionId;
+};
+
+/**
+ * Type predicate for authenticated store
+ */
+const isAuthenticatedStore = (store: AuthStore): store is AuthenticatedAuthStore => {
+  return store.isAuthenticated && store.user !== null && store.userId !== null;
+};
+
+/**
+ * Enhanced token payload interface with branded types
+ */
 interface TokenPayload {
-  exp: number;
-  iat: number;
-  sub: string;
-  email: string;
+  readonly exp: number;
+  readonly iat: number;
+  readonly sub: UserId;
+  readonly email: string;
+  readonly sessionId: SessionId;
+  readonly role: string;
+  readonly permissions: string[];
+  readonly deviceId?: string;
+  readonly scope?: string[];
 }
 
 // API service integration
@@ -124,10 +302,19 @@ const authApi = {
   },
 };
 
-// Utility function to decode JWT token
-const decodeToken = (token: string): TokenPayload | null => {
+/**
+ * Enhanced JWT token decoder with type safety and error handling
+ */
+const decodeToken = (token: AccessToken): TokenPayload | null => {
   try {
-    const base64Url = token.split('.')[1];
+    assertAccessToken(token);
+    
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      throw new Error('Invalid JWT format');
+    }
+    
+    const base64Url = parts[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
     const jsonPayload = decodeURIComponent(
       window.atob(base64)
@@ -135,10 +322,58 @@ const decodeToken = (token: string): TokenPayload | null => {
         .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
         .join('')
     );
-    return JSON.parse(jsonPayload);
-  } catch {
+    
+    const payload = JSON.parse(jsonPayload);
+    
+    // Validate required fields
+    if (!payload.exp || !payload.iat || !payload.sub) {
+      throw new Error('Invalid token payload');
+    }
+    
+    return {
+      ...payload,
+      sub: createUserId(payload.sub),
+      sessionId: payload.sessionId ? createSessionId(payload.sessionId) : createSessionId(''),
+    } as TokenPayload;
+  } catch (error) {
+    console.warn('Token decoding failed:', error);
     return null;
   }
+};
+
+/**
+ * Generate device fingerprint for security tracking
+ */
+const generateDeviceFingerprint = (): string => {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.textBaseline = 'top';
+    ctx.font = '14px Arial';
+    ctx.fillText('Device fingerprint', 2, 2);
+  }
+  
+  const fingerprint = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width + 'x' + screen.height,
+    new Date().getTimezoneOffset(),
+    canvas.toDataURL(),
+  ].join('|');
+  
+  return btoa(fingerprint).slice(0, 32);
+};
+
+/**
+ * Get current security context
+ */
+const getCurrentSecurityContext = (): Partial<SecurityContext> => {
+  return {
+    userAgent: navigator.userAgent,
+    deviceFingerprint: generateDeviceFingerprint(),
+    timestamp: Date.now(),
+    // Note: IP address and location would be obtained from server
+  };
 };
 
 // Create the auth store with secure storage instead of localStorage
@@ -147,6 +382,9 @@ window.addEventListener('session-timeout', () => {
   useAuthStore.getState().logout();
 });
 
+/**
+ * Create the enhanced auth store with advanced TypeScript patterns
+ */
 export const useAuthStore = create<AuthStore>()(
   devtools(
     immer((set, get) => ({

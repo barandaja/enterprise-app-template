@@ -16,6 +16,8 @@ const routeToBreadcrumb: Record<string, string> = {
   '/': 'Dashboard',
   '/profile': 'Profile',
   '/profile/edit': 'Edit Profile',
+  '/profile/settings': 'Profile Settings',
+  '/profile/security': 'Security Settings',
   '/settings': 'Settings',
   '/privacy-settings': 'Privacy Settings',
   '/security': 'Security',

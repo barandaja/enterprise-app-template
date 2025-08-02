@@ -25,14 +25,20 @@ import type {
   ApiError,
   ApiErrorCode,
   ApiRequestConfig,
+  EnhancedApiRequestConfig,
   ApiClientConfig,
-  ApiMethods,
+  TypedApiMethods,
   RetryConfig,
   RequestController,
   CancellationRegistry,
   DEFAULT_API_CONFIG,
-  DEFAULT_RETRY_CONFIG
+  DEFAULT_RETRY_CONFIG,
+  MiddlewareFunction,
+  MiddlewareContext,
+  CacheConfig,
+  PerformanceConfig,
 } from './types';
+import { cacheService, type CacheService } from './cache.service';
 import { useAuthStore } from '../../stores/authStore';
 import { addCSRFToken } from '../../security/csrf';
 import { tokenManager } from '../auth/tokenManager';
@@ -303,14 +309,129 @@ class ApiLogger {
 }
 
 /**
- * Core API client class
+ * Performance monitor for tracking API metrics
  */
-export class ApiClient implements ApiMethods {
+class PerformanceMonitor {
+  private metrics = new Map<string, {
+    count: number;
+    totalTime: number;
+    avgTime: number;
+    minTime: number;
+    maxTime: number;
+    errors: number;
+  }>();
+
+  track(key: string, duration: number, isError = false): void {
+    const existing = this.metrics.get(key) || {
+      count: 0,
+      totalTime: 0,
+      avgTime: 0,
+      minTime: Infinity,
+      maxTime: 0,
+      errors: 0,
+    };
+
+    existing.count++;
+    existing.totalTime += duration;
+    existing.avgTime = existing.totalTime / existing.count;
+    existing.minTime = Math.min(existing.minTime, duration);
+    existing.maxTime = Math.max(existing.maxTime, duration);
+    
+    if (isError) {
+      existing.errors++;
+    }
+
+    this.metrics.set(key, existing);
+  }
+
+  getMetrics(): Record<string, {
+    count: number;
+    avgTime: number;
+    minTime: number;
+    maxTime: number;
+    errorRate: number;
+  }> {
+    const result: Record<string, any> = {};
+    
+    for (const [key, metrics] of this.metrics) {
+      result[key] = {
+        count: metrics.count,
+        avgTime: metrics.avgTime,
+        minTime: metrics.minTime === Infinity ? 0 : metrics.minTime,
+        maxTime: metrics.maxTime,
+        errorRate: metrics.count > 0 ? metrics.errors / metrics.count : 0,
+      };
+    }
+    
+    return result;
+  }
+
+  clear(): void {
+    this.metrics.clear();
+  }
+}
+
+/**
+ * Middleware manager for processing request/response pipeline
+ */
+class MiddlewareManager {
+  private globalMiddleware: MiddlewareFunction[] = [];
+  private routeMiddleware = new Map<string, MiddlewareFunction[]>();
+
+  addGlobal(middleware: MiddlewareFunction): void {
+    this.globalMiddleware.push(middleware);
+  }
+
+  addRoute(pattern: string, middleware: MiddlewareFunction): void {
+    const existing = this.routeMiddleware.get(pattern) || [];
+    existing.push(middleware);
+    this.routeMiddleware.set(pattern, existing);
+  }
+
+  getMiddleware(url: string): MiddlewareFunction[] {
+    const middleware = [...this.globalMiddleware];
+    
+    for (const [pattern, routeMiddleware] of this.routeMiddleware) {
+      if (new RegExp(pattern).test(url)) {
+        middleware.push(...routeMiddleware);
+      }
+    }
+    
+    return middleware;
+  }
+
+  async execute(
+    middleware: MiddlewareFunction[],
+    context: MiddlewareContext,
+    finalHandler: () => Promise<AxiosResponse>
+  ): Promise<AxiosResponse> {
+    let index = 0;
+    
+    const next = async (): Promise<AxiosResponse> => {
+      if (index >= middleware.length) {
+        return finalHandler();
+      }
+      
+      const currentMiddleware = middleware[index++];
+      return currentMiddleware(context, next);
+    };
+    
+    return next();
+  }
+}
+
+/**
+ * Enhanced Core API client class with enterprise features
+ */
+export class ApiClient implements TypedApiMethods {
   private readonly axiosInstance: AxiosInstance;
   private readonly deduplicator: RequestDeduplicator;
   private readonly cancellation: RequestCancellationManager;
   private readonly retryManager: RetryManager;
   private readonly logger: ApiLogger;
+  private readonly performanceMonitor: PerformanceMonitor;
+  private readonly middlewareManager: MiddlewareManager;
+  private readonly cacheService: CacheService;
   private readonly config: ApiClientConfig;
 
   constructor(config: Partial<ApiClientConfig> = {}) {
@@ -319,6 +440,9 @@ export class ApiClient implements ApiMethods {
     this.cancellation = new RequestCancellationManager();
     this.retryManager = new RetryManager();
     this.logger = new ApiLogger(this.config.enableLogging);
+    this.performanceMonitor = new PerformanceMonitor();
+    this.middlewareManager = new MiddlewareManager();
+    this.cacheService = cacheService;
 
     this.axiosInstance = axios.create({
       baseURL: this.config.baseURL,
@@ -483,23 +607,73 @@ export class ApiClient implements ApiMethods {
   }
 
   /**
-   * Execute request with retry logic and deduplication
+   * Execute request with enhanced features (caching, middleware, performance monitoring)
    */
   private async executeRequest<T>(
-    config: InternalAxiosRequestConfig & ApiRequestConfig
+    config: InternalAxiosRequestConfig & EnhancedApiRequestConfig
   ): Promise<ApiResponse<T>> {
-    const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
-    
-    const requestFn = async (): Promise<AxiosResponse<T>> => {
-      if (config.deduplication !== false) {
-        return this.deduplicator.deduplicate(config, () => this.axiosInstance(config));
-      }
-      return this.axiosInstance(config);
-    };
+    const startTime = performance.now();
+    const requestKey = `${config.method?.toUpperCase()} ${config.url}`;
+    let isError = false;
 
     try {
-      const response = await this.retryManager.executeWithRetry(requestFn, retryConfig);
-      
+      // Check cache first if enabled
+      if (config.cache?.enabled) {
+        const cacheKey = config.cache.key || 
+          (typeof config.cache.key === 'function' 
+            ? config.cache.key(config) 
+            : `${config.method}:${config.url}:${JSON.stringify(config.params)}`);
+        
+        const cached = await this.cacheService.get<T>(cacheKey);
+        if (cached !== null) {
+          const endTime = performance.now();
+          this.performanceMonitor.track(requestKey, endTime - startTime);
+          
+          return {
+            success: true,
+            data: cached,
+            meta: {
+              timestamp: new Date().toISOString(),
+              requestId: config.headers?.['X-Request-ID'] as string || crypto.randomUUID(),
+              cached: true,
+            },
+          } as ApiSuccessResponse<T>;
+        }
+      }
+
+      // Execute with middleware pipeline
+      const middleware = [
+        ...(config.middleware || []),
+        ...this.middlewareManager.getMiddleware(config.url || ''),
+      ];
+
+      const context: MiddlewareContext = {
+        request: config,
+        client: this,
+      };
+
+      const response = await this.middlewareManager.execute(
+        middleware,
+        context,
+        () => this.executeRequestWithRetry(config)
+      );
+
+      // Cache successful responses
+      if (config.cache?.enabled && response.status >= 200 && response.status < 300) {
+        const cacheKey = config.cache.key || 
+          (typeof config.cache.key === 'function' 
+            ? config.cache.key(config) 
+            : `${config.method}:${config.url}:${JSON.stringify(config.params)}`);
+        
+        await this.cacheService.set(cacheKey, response.data, {
+          ttl: config.cache.ttl,
+          tags: config.cache.tags,
+        });
+      }
+
+      const endTime = performance.now();
+      this.performanceMonitor.track(requestKey, endTime - startTime, isError);
+
       // Transform response to ApiResponse format
       return {
         success: true,
@@ -510,6 +684,10 @@ export class ApiClient implements ApiMethods {
         },
       } as ApiSuccessResponse<T>;
     } catch (error) {
+      isError = true;
+      const endTime = performance.now();
+      this.performanceMonitor.track(requestKey, endTime - startTime, isError);
+      
       if (error instanceof ApiError) {
         throw error;
       }
@@ -517,16 +695,61 @@ export class ApiClient implements ApiMethods {
     }
   }
 
+  /**
+   * Execute request with retry logic and deduplication (legacy method)
+   */
+  private async executeRequestWithRetry<T>(
+    config: InternalAxiosRequestConfig & ApiRequestConfig
+  ): Promise<AxiosResponse<T>> {
+    const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+    
+    const requestFn = async (): Promise<AxiosResponse<T>> => {
+      if (config.deduplication !== false) {
+        return this.deduplicator.deduplicate(config, () => this.axiosInstance(config));
+      }
+      return this.axiosInstance(config);
+    };
+
+    return this.retryManager.executeWithRetry(requestFn, retryConfig);
+  }
+
   // =============================================================================
   // Public API Methods
   // =============================================================================
 
+  // ===========================================================================
+  // Enhanced API Methods with Middleware and Caching Support
+  // ===========================================================================
+
   /**
-   * GET request
+   * Add global middleware
+   */
+  addMiddleware(middleware: MiddlewareFunction): void {
+    this.middlewareManager.addGlobal(middleware);
+  }
+
+  /**
+   * Add route-specific middleware
+   */
+  addRouteMiddleware(pattern: string, middleware: MiddlewareFunction): void {
+    this.middlewareManager.addRoute(pattern, middleware);
+  }
+
+  /**
+   * Create type-safe query builder
+   */
+  query<T extends Record<string, unknown> = Record<string, unknown>>(): QueryBuilder<T> {
+    // This would return a query builder implementation
+    // For now, return a placeholder
+    return {} as QueryBuilder<T>;
+  }
+
+  /**
+   * GET request with enhanced features
    */
   async get<TResponse = unknown>(
     url: string,
-    config: ApiRequestConfig = {}
+    config: EnhancedApiRequestConfig = {}
   ): Promise<ApiResponse<TResponse>> {
     return this.executeRequest<TResponse>({
       ...config,
@@ -536,12 +759,12 @@ export class ApiClient implements ApiMethods {
   }
 
   /**
-   * POST request
+   * POST request with enhanced features
    */
   async post<TRequest = unknown, TResponse = unknown>(
     url: string,
     data?: TRequest,
-    config: ApiRequestConfig = {}
+    config: EnhancedApiRequestConfig = {}
   ): Promise<ApiResponse<TResponse>> {
     return this.executeRequest<TResponse>({
       ...config,
@@ -552,12 +775,12 @@ export class ApiClient implements ApiMethods {
   }
 
   /**
-   * PUT request
+   * PUT request with enhanced features
    */
   async put<TRequest = unknown, TResponse = unknown>(
     url: string,
     data?: TRequest,
-    config: ApiRequestConfig = {}
+    config: EnhancedApiRequestConfig = {}
   ): Promise<ApiResponse<TResponse>> {
     return this.executeRequest<TResponse>({
       ...config,
@@ -568,12 +791,12 @@ export class ApiClient implements ApiMethods {
   }
 
   /**
-   * PATCH request
+   * PATCH request with enhanced features
    */
   async patch<TRequest = unknown, TResponse = unknown>(
     url: string,
     data?: TRequest,
-    config: ApiRequestConfig = {}
+    config: EnhancedApiRequestConfig = {}
   ): Promise<ApiResponse<TResponse>> {
     return this.executeRequest<TResponse>({
       ...config,
@@ -584,11 +807,11 @@ export class ApiClient implements ApiMethods {
   }
 
   /**
-   * DELETE request
+   * DELETE request with enhanced features
    */
   async delete<TResponse = unknown>(
     url: string,
-    config: ApiRequestConfig = {}
+    config: EnhancedApiRequestConfig = {}
   ): Promise<ApiResponse<TResponse>> {
     return this.executeRequest<TResponse>({
       ...config,
@@ -598,12 +821,12 @@ export class ApiClient implements ApiMethods {
   }
 
   /**
-   * Upload file with progress tracking
+   * Upload file with progress tracking and enhanced features
    */
   async upload<TResponse = unknown>(
     url: string,
     formData: FormData,
-    config: ApiRequestConfig = {}
+    config: EnhancedApiRequestConfig = {}
   ): Promise<ApiResponse<TResponse>> {
     return this.executeRequest<TResponse>({
       ...config,
@@ -656,6 +879,33 @@ export class ApiClient implements ApiMethods {
    */
   getConfig(): Readonly<ApiClientConfig> {
     return { ...this.config };
+  }
+
+  /**
+   * Get performance metrics
+   */
+  getPerformanceMetrics(): Record<string, {
+    count: number;
+    avgTime: number;
+    minTime: number;
+    maxTime: number;
+    errorRate: number;
+  }> {
+    return this.performanceMonitor.getMetrics();
+  }
+
+  /**
+   * Clear performance metrics
+   */
+  clearPerformanceMetrics(): void {
+    this.performanceMonitor.clear();
+  }
+
+  /**
+   * Get cache service instance
+   */
+  getCacheService(): CacheService {
+    return this.cacheService;
   }
 }
 

@@ -594,9 +594,81 @@ export class ApiService {
 // =============================================================================
 
 /**
- * Default API service instance
+ * Enterprise API middleware for common functionality
+ */
+export const commonMiddleware = {
+  /**
+   * Request logging middleware
+   */
+  requestLogger: (context: MiddlewareContext, next: () => Promise<any>) => {
+    const start = Date.now();
+    console.log(`🚀 ${context.request.method?.toUpperCase()} ${context.request.url}`);
+    
+    return next().then((response) => {
+      const duration = Date.now() - start;
+      console.log(`✅ ${context.request.method?.toUpperCase()} ${context.request.url} - ${response.status} (${duration}ms)`);
+      return response;
+    }).catch((error) => {
+      const duration = Date.now() - start;
+      console.error(`❌ ${context.request.method?.toUpperCase()} ${context.request.url} - Error (${duration}ms):`, error);
+      throw error;
+    });
+  },
+
+  /**
+   * Performance monitoring middleware
+   */
+  performanceMonitor: (threshold = 1000) => (context: MiddlewareContext, next: () => Promise<any>) => {
+    const start = Date.now();
+    
+    return next().then((response) => {
+      const duration = Date.now() - start;
+      if (duration > threshold) {
+        console.warn(`🐌 Slow request detected: ${context.request.method?.toUpperCase()} ${context.request.url} took ${duration}ms`);
+      }
+      return response;
+    });
+  },
+
+  /**
+   * Error handling middleware
+   */
+  errorHandler: (context: MiddlewareContext, next: () => Promise<any>) => {
+    return next().catch((error) => {
+      // Add context to error
+      if (error instanceof Error) {
+        error.message = `[${context.request.method?.toUpperCase()} ${context.request.url}] ${error.message}`;
+      }
+      throw error;
+    });
+  },
+
+  /**
+   * Response transformation middleware
+   */
+  responseTransformer: <T>(transformer: (data: any) => T) => (context: MiddlewareContext, next: () => Promise<any>) => {
+    return next().then((response) => {
+      if (response.data) {
+        response.data = transformer(response.data);
+      }
+      return response;
+    });
+  },
+};
+
+/**
+ * Default API service instance with enhanced features
  */
 export const api = new ApiService();
+
+// Add default middleware for development
+if (import.meta.env.DEV) {
+  api.addMiddleware(commonMiddleware.requestLogger);
+  api.addMiddleware(commonMiddleware.performanceMonitor(1000));
+}
+
+// Always add error handling middleware
+api.addMiddleware(commonMiddleware.errorHandler);
 
 // Re-export all types and utilities
 export type {
@@ -605,6 +677,7 @@ export type {
   ApiSuccessResponse,
   ApiErrorResponse,
   ApiRequestConfig,
+  EnhancedApiRequestConfig,
   ApiClientConfig,
   
   // Response types
@@ -619,16 +692,63 @@ export type {
   ApiService as ApiServiceType,
   AuthService as AuthServiceType,
   UserService as UserServiceType,
+  NotificationService as NotificationServiceType,
+  PreferencesService as PreferencesServiceType,
+  PermissionsService as PermissionsServiceType,
+  CacheService as CacheServiceType,
   
   // Endpoint types
   ApiEndpoints,
+  TypedApiEndpoint,
+  
+  // Advanced types
+  MiddlewareFunction,
+  QueryBuilder,
+  HttpMethod,
+  ApiPath,
+  
+  // Notification types
+  BaseNotification,
+  NotificationWithStatus,
+  NotificationTemplate,
+  NotificationSubscription,
+  NotificationType,
+  NotificationPriority,
+  NotificationChannel,
+  
+  // Preferences types
+  PreferenceValue,
+  PreferenceDefinition,
+  UserPreferenceEntry,
+  PreferenceGroup,
+  PreferenceBackup,
+  
+  // Permissions types
+  Permission,
+  Role,
+  UserRoleAssignment,
+  PermissionCheckRequest,
+  PermissionCheckResult,
+  PermissionAuditLog,
+  
+  // Cache types
+  CacheEntry,
+  CacheStats,
+  CacheServiceConfig,
 } from './types';
 
 // Re-export error handling
 export { ApiError, ApiErrorCode } from './client';
 
-// Re-export services for direct access
-export { authService, userService };
+// Re-export all services for direct access
+export { 
+  authService, 
+  userService, 
+  notificationService, 
+  preferencesService, 
+  permissionsService, 
+  cacheService 
+};
 
 // Re-export utilities
 export {
@@ -656,6 +776,80 @@ export {
   debounce,
   throttle,
 } from '../utils/api-helpers';
+
+// Re-export cache utilities
+export {
+  CacheStorageType,
+  InvalidationStrategy,
+  DEFAULT_CACHE_CONFIG,
+} from './cache.service';
+
+// Re-export notification utilities
+export {
+  createNotificationSchema,
+  updateNotificationSchema,
+  subscriptionPreferencesSchema,
+  createTemplateSchema,
+  NotificationQueryBuilder,
+} from './notification.service';
+
+// Re-export preferences utilities
+export {
+  PREFERENCE_KEYS,
+  preferenceValueSchema,
+  preferenceDefinitionSchema,
+  userPreferenceEntrySchema,
+  preferenceGroupSchema,
+  createBackupSchema,
+  syncConflictResolutionSchema,
+} from './preferences.service';
+
+// Re-export permissions utilities
+export {
+  RESOURCES,
+  ACTIONS,
+  PERMISSION_SETS,
+  SYSTEM_ROLES,
+  createPermissionSchema,
+  createRoleSchema,
+  assignRoleSchema,
+  permissionCheckSchema,
+  bulkPermissionCheckSchema,
+} from './permissions.service';
+
+/**
+ * Utility function to create a configured API service instance
+ */
+export function createApiService(config: {
+  baseURL?: string;
+  enableLogging?: boolean;
+  enableCaching?: boolean;
+  enableRealtime?: boolean;
+  middleware?: MiddlewareFunction[];
+}): ApiService {
+  const apiService = new ApiService({
+    baseURL: config.baseURL,
+    enableLogging: config.enableLogging,
+    enableCaching: config.enableCaching,
+  });
+
+  // Add common middleware
+  if (config.enableLogging) {
+    apiService.addMiddleware(commonMiddleware.requestLogger);
+    apiService.addMiddleware(commonMiddleware.performanceMonitor(1000));
+  }
+  
+  apiService.addMiddleware(commonMiddleware.errorHandler);
+  
+  // Add custom middleware
+  if (config.middleware) {
+    config.middleware.forEach(middleware => {
+      apiService.addMiddleware(middleware);
+    });
+  }
+
+  return apiService;
+}
 
 // Default export
 export default api;
