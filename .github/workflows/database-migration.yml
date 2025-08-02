@@ -1,0 +1,256 @@
+name: Database Migration Strategy
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      migration_type:
+        required: true
+        type: string
+        description: 'Type of migration: upgrade, downgrade, or validate'
+    secrets:
+      VAULT_TOKEN:
+        required: true
+
+jobs:
+  pre-migration-backup:
+    name: Backup Database
+    runs-on: ubuntu-latest
+    outputs:
+      backup_id: ${{ steps.backup.outputs.backup_id }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Get database credentials from Vault
+        uses: hashicorp/vault-action@v2
+        with:
+          url: ${{ vars.VAULT_URL }}
+          token: ${{ secrets.VAULT_TOKEN }}
+          secrets: |
+            database/creds/${{ inputs.environment }}-${{ inputs.service }} username | DB_USERNAME
+            database/creds/${{ inputs.environment }}-${{ inputs.service }} password | DB_PASSWORD
+            secret/data/${{ inputs.environment }}/database host | DB_HOST
+            secret/data/${{ inputs.environment }}/database port | DB_PORT
+      
+      - name: Create database backup
+        id: backup
+        run: |
+          BACKUP_ID="${{ inputs.service }}-${{ inputs.environment }}-$(date +%Y%m%d%H%M%S)"
+          echo "backup_id=$BACKUP_ID" >> $GITHUB_OUTPUT
+          
+          # Create backup using pg_dump
+          PGPASSWORD=${{ env.DB_PASSWORD }} pg_dump \
+            -h ${{ env.DB_HOST }} \
+            -p ${{ env.DB_PORT }} \
+            -U ${{ env.DB_USERNAME }} \
+            -d ${{ inputs.service }}_db \
+            -Fc -b -v \
+            -f "/tmp/${BACKUP_ID}.dump"
+          
+          # Upload to S3
+          aws s3 cp "/tmp/${BACKUP_ID}.dump" \
+            "s3://${{ vars.BACKUP_BUCKET }}/database-backups/${BACKUP_ID}.dump"
+          
+          # Create backup metadata
+          echo '{
+            "backup_id": "'$BACKUP_ID'",
+            "service": "${{ inputs.service }}",
+            "environment": "${{ inputs.environment }}",
+            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+            "size": "'$(stat -c%s "/tmp/${BACKUP_ID}.dump")'"
+          }' | aws s3 cp - "s3://${{ vars.BACKUP_BUCKET }}/database-backups/${BACKUP_ID}.json"
+
+  validate-migration:
+    name: Validate Migration
+    runs-on: ubuntu-latest
+    needs: pre-migration-backup
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Alembic
+        working-directory: services/${{ inputs.service }}
+        run: |
+          pip install alembic psycopg2-binary sqlalchemy
+      
+      - name: Get database credentials
+        uses: hashicorp/vault-action@v2
+        with:
+          url: ${{ vars.VAULT_URL }}
+          token: ${{ secrets.VAULT_TOKEN }}
+          secrets: |
+            database/creds/${{ inputs.environment }}-${{ inputs.service }}-readonly username | DB_USERNAME
+            database/creds/${{ inputs.environment }}-${{ inputs.service }}-readonly password | DB_PASSWORD
+            secret/data/${{ inputs.environment }}/database host | DB_HOST
+      
+      - name: Validate migration scripts
+        working-directory: services/${{ inputs.service }}
+        env:
+          DATABASE_URL: postgresql://${{ env.DB_USERNAME }}:${{ env.DB_PASSWORD }}@${{ env.DB_HOST }}:5432/${{ inputs.service }}_db
+        run: |
+          # Check migration history
+          alembic history
+          
+          # Validate pending migrations
+          alembic check
+          
+          # Dry run (show SQL without executing)
+          if [ "${{ inputs.migration_type }}" == "upgrade" ]; then
+            alembic upgrade head --sql
+          elif [ "${{ inputs.migration_type }}" == "downgrade" ]; then
+            alembic downgrade -1 --sql
+          fi
+
+  execute-migration:
+    name: Execute Migration
+    runs-on: ubuntu-latest
+    needs: validate-migration
+    if: inputs.migration_type != 'validate'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        working-directory: services/${{ inputs.service }}
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Get migration credentials
+        uses: hashicorp/vault-action@v2
+        with:
+          url: ${{ vars.VAULT_URL }}
+          token: ${{ secrets.VAULT_TOKEN }}
+          secrets: |
+            database/creds/${{ inputs.environment }}-${{ inputs.service }}-migration username | DB_USERNAME
+            database/creds/${{ inputs.environment }}-${{ inputs.service }}-migration password | DB_PASSWORD
+            secret/data/${{ inputs.environment }}/database host | DB_HOST
+      
+      - name: Execute migration
+        working-directory: services/${{ inputs.service }}
+        env:
+          DATABASE_URL: postgresql://${{ env.DB_USERNAME }}:${{ env.DB_PASSWORD }}@${{ env.DB_HOST }}:5432/${{ inputs.service }}_db
+        run: |
+          # Record pre-migration state
+          echo "Pre-migration database version:"
+          alembic current
+          
+          # Execute migration
+          if [ "${{ inputs.migration_type }}" == "upgrade" ]; then
+            alembic upgrade head
+          elif [ "${{ inputs.migration_type }}" == "downgrade" ]; then
+            alembic downgrade -1
+          fi
+          
+          # Record post-migration state
+          echo "Post-migration database version:"
+          alembic current
+      
+      - name: Verify migration
+        working-directory: services/${{ inputs.service }}
+        run: |
+          # Run migration verification tests
+          if [ -f "tests/test_migrations.py" ]; then
+            pytest tests/test_migrations.py -v
+          fi
+
+  post-migration-validation:
+    name: Post-Migration Validation
+    runs-on: ubuntu-latest
+    needs: execute-migration
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run health checks
+        run: |
+          # Check service health
+          SERVICE_URL="${{ vars.SERVICE_URLS[${{ inputs.environment }}] }}/${{ inputs.service }}"
+          
+          for i in {1..5}; do
+            if curl -f "${SERVICE_URL}/health"; then
+              echo "Health check passed"
+              break
+            fi
+            echo "Health check attempt $i failed, retrying..."
+            sleep 10
+          done
+      
+      - name: Run integration tests
+        run: |
+          # Run subset of integration tests that validate database
+          npm run test:integration:db
+
+  rollback-on-failure:
+    name: Rollback Migration
+    runs-on: ubuntu-latest
+    needs: [pre-migration-backup, execute-migration]
+    if: failure()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Get restore credentials
+        uses: hashicorp/vault-action@v2
+        with:
+          url: ${{ vars.VAULT_URL }}
+          token: ${{ secrets.VAULT_TOKEN }}
+          secrets: |
+            database/creds/${{ inputs.environment }}-${{ inputs.service }}-admin username | DB_USERNAME
+            database/creds/${{ inputs.environment }}-${{ inputs.service }}-admin password | DB_PASSWORD
+            secret/data/${{ inputs.environment }}/database host | DB_HOST
+      
+      - name: Restore from backup
+        run: |
+          BACKUP_ID="${{ needs.pre-migration-backup.outputs.backup_id }}"
+          
+          # Download backup from S3
+          aws s3 cp "s3://${{ vars.BACKUP_BUCKET }}/database-backups/${BACKUP_ID}.dump" \
+            "/tmp/${BACKUP_ID}.dump"
+          
+          # Restore database
+          PGPASSWORD=${{ env.DB_PASSWORD }} pg_restore \
+            -h ${{ env.DB_HOST }} \
+            -U ${{ env.DB_USERNAME }} \
+            -d ${{ inputs.service }}_db \
+            -c -v \
+            "/tmp/${BACKUP_ID}.dump"
+      
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "Migration rollback executed",
+              attachments: [{
+                color: 'danger',
+                title: 'Database Migration Failed',
+                fields: [
+                  { title: 'Service', value: '${{ inputs.service }}', short: true },
+                  { title: 'Environment', value: '${{ inputs.environment }}', short: true },
+                  { title: 'Backup ID', value: '${{ needs.pre-migration-backup.outputs.backup_id }}', short: false }
+                ]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

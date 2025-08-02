@@ -1,0 +1,83 @@
+name: Deploy with Vault Secret Management
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.service }} to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      
+      - name: Authenticate with Vault
+        id: vault
+        uses: hashicorp/vault-action@v2
+        with:
+          url: ${{ vars.VAULT_URL }}
+          namespace: ${{ vars.VAULT_NAMESPACE }}
+          method: jwt
+          role: ${{ inputs.service }}-${{ inputs.environment }}
+          jwtGithubAudience: ${{ vars.VAULT_AUDIENCE }}
+          exportToken: true
+          secrets: |
+            secret/data/${{ inputs.environment }}/${{ inputs.service }} * | SERVICE_SECRETS_
+            database/creds/${{ inputs.environment }}-${{ inputs.service }} username | DB_USERNAME
+            database/creds/${{ inputs.environment }}-${{ inputs.service }} password | DB_PASSWORD
+      
+      - name: Validate Vault access
+        run: |
+          chmod +x .github/workflows/scripts/vault-integration.sh
+          .github/workflows/scripts/vault-integration.sh validate ${{ inputs.service }} ${{ inputs.environment }}
+      
+      - name: Create Kubernetes secrets
+        run: |
+          # Create namespace if it doesn't exist
+          kubectl create namespace ${{ inputs.environment }} --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Create secret from Vault data
+          .github/workflows/scripts/vault-integration.sh create-k8s-secret \
+            ${{ inputs.service }} \
+            ${{ inputs.environment }} \
+            ${{ inputs.environment }}
+      
+      - name: Deploy application
+        run: |
+          # Update image tag
+          kubectl set image deployment/${{ inputs.service }} \
+            ${{ inputs.service }}=ghcr.io/${{ github.repository }}/${{ inputs.service }}:${{ inputs.version }} \
+            -n ${{ inputs.environment }}
+          
+          # Wait for rollout
+          kubectl rollout status deployment/${{ inputs.service }} \
+            -n ${{ inputs.environment }} \
+            --timeout=300s
+      
+      - name: Rotate secrets post-deployment
+        if: inputs.environment == 'production'
+        run: |
+          .github/workflows/scripts/vault-integration.sh rotate-secrets \
+            ${{ inputs.service }} \
+            ${{ inputs.environment }}

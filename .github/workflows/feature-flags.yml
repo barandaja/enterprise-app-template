@@ -1,0 +1,384 @@
+name: Feature Flags Integration
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      feature_name:
+        required: true
+        type: string
+      rollout_percentage:
+        required: false
+        type: number
+        default: 0
+    secrets:
+      UNLEASH_API_KEY:
+        required: true
+
+jobs:
+  manage-feature-flags:
+    name: Manage Feature Flags
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install Unleash SDK
+        run: |
+          npm install -g unleash-client unleash-server-sdk
+      
+      - name: Configure feature flag
+        env:
+          UNLEASH_URL: ${{ vars.UNLEASH_URL }}
+          UNLEASH_API_KEY: ${{ secrets.UNLEASH_API_KEY }}
+        run: |
+          # Create or update feature flag
+          curl -X PUT "$UNLEASH_URL/api/admin/features/${{ inputs.feature_name }}" \
+            -H "Authorization: $UNLEASH_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "${{ inputs.feature_name }}",
+              "description": "Feature flag for ${{ inputs.service }} in ${{ inputs.environment }}",
+              "type": "release",
+              "enabled": true,
+              "stale": false,
+              "strategies": [{
+                "name": "gradualRolloutUserId",
+                "parameters": {
+                  "percentage": "${{ inputs.rollout_percentage }}",
+                  "groupId": "${{ inputs.service }}-${{ inputs.environment }}"
+                },
+                "constraints": [{
+                  "contextName": "environment",
+                  "operator": "IN",
+                  "values": ["${{ inputs.environment }}"]
+                }]
+              }],
+              "variants": [{
+                "name": "enabled",
+                "weight": ${{ inputs.rollout_percentage }},
+                "payload": {
+                  "type": "json",
+                  "value": "{\"service\":\"${{ inputs.service }}\",\"version\":\"${{ github.sha }}\"}"
+                }
+              }, {
+                "name": "disabled",
+                "weight": $((100 - ${{ inputs.rollout_percentage }}))
+              }]
+            }'
+      
+      - name: Create feature flag configuration
+        run: |
+          # Generate feature flag config for the service
+          cat <<EOF > feature-flags-config.json
+          {
+            "unleashUrl": "${{ vars.UNLEASH_URL }}",
+            "unleashApiKey": "${{ secrets.UNLEASH_API_KEY }}",
+            "appName": "${{ inputs.service }}",
+            "environment": "${{ inputs.environment }}",
+            "features": {
+              "${{ inputs.feature_name }}": {
+                "enabled": true,
+                "rolloutPercentage": ${{ inputs.rollout_percentage }},
+                "variants": ["enabled", "disabled"],
+                "metadata": {
+                  "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                  "deployedBy": "github-actions",
+                  "gitCommit": "${{ github.sha }}"
+                }
+              }
+            }
+          }
+          EOF
+      
+      - name: Update application configuration
+        run: |
+          # Create ConfigMap for feature flags
+          kubectl create configmap feature-flags-${{ inputs.service }} \
+            --from-file=feature-flags-config.json \
+            --namespace=${{ inputs.environment }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+      
+      - name: Add feature flag SDK to service
+        run: |
+          # Update deployment to include feature flag SDK
+          kubectl patch deployment ${{ inputs.service }} \
+            -n ${{ inputs.environment }} \
+            --type=json \
+            -p='[
+              {
+                "op": "add",
+                "path": "/spec/template/spec/containers/0/env/-",
+                "value": {
+                  "name": "UNLEASH_URL",
+                  "value": "${{ vars.UNLEASH_URL }}"
+                }
+              },
+              {
+                "op": "add",
+                "path": "/spec/template/spec/containers/0/env/-",
+                "value": {
+                  "name": "UNLEASH_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "unleash-secrets",
+                      "key": "api-key"
+                    }
+                  }
+                }
+              },
+              {
+                "op": "add",
+                "path": "/spec/template/spec/containers/0/env/-",
+                "value": {
+                  "name": "UNLEASH_APP_NAME",
+                  "value": "${{ inputs.service }}"
+                }
+              },
+              {
+                "op": "add",
+                "path": "/spec/template/spec/containers/0/env/-",
+                "value": {
+                  "name": "UNLEASH_ENVIRONMENT",
+                  "value": "${{ inputs.environment }}"
+                }
+              }
+            ]'
+      
+      - name: Create feature flag metrics
+        run: |
+          # Add Prometheus metrics for feature flag usage
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-feature-flag-queries
+            namespace: monitoring
+          data:
+            queries.yaml: |
+              - name: feature_flag_evaluation_total
+                query: |
+                  sum by (feature, variant) (
+                    rate(unleash_feature_toggle_usage_total[5m])
+                  )
+              - name: feature_flag_errors
+                query: |
+                  sum by (feature) (
+                    rate(unleash_client_errors_total[5m])
+                  )
+              - name: feature_flag_variant_distribution
+                query: |
+                  unleash_feature_toggle_variant_usage_total / ignoring(variant) group_left
+                  sum without (variant) (unleash_feature_toggle_variant_usage_total)
+          EOF
+      
+      - name: Monitor feature flag impact
+        run: |
+          # Create monitoring dashboard for feature flags
+          cat <<EOF > feature-flag-monitoring.sh
+          #!/bin/bash
+          
+          # Monitor error rates for enabled vs disabled variants
+          monitor_feature_impact() {
+            local feature="$1"
+            local service="$2"
+            
+            # Get error rate for enabled variant
+            enabled_errors=$(prometheus_query "
+              rate(http_requests_total{
+                service='$service',
+                feature_flag='$feature',
+                variant='enabled',
+                status=~'5..'
+              }[5m])
+            ")
+            
+            # Get error rate for disabled variant
+            disabled_errors=$(prometheus_query "
+              rate(http_requests_total{
+                service='$service',
+                feature_flag='$feature',
+                variant='disabled',
+                status=~'5..'
+              }[5m])
+            ")
+            
+            # Compare error rates
+            if (( $(echo "$enabled_errors > $disabled_errors * 1.5" | bc -l) )); then
+              echo "WARNING: Feature flag '$feature' showing increased error rate"
+              return 1
+            fi
+            
+            return 0
+          }
+          
+          prometheus_query() {
+            kubectl exec -n monitoring deployment/prometheus -- \
+              promtool query instant "$1" | jq -r '.data.result[0].value[1] // "0"'
+          }
+          
+          # Run monitoring
+          monitor_feature_impact "${{ inputs.feature_name }}" "${{ inputs.service }}"
+          EOF
+          
+          chmod +x feature-flag-monitoring.sh
+
+  progressive-rollout:
+    name: Progressive Feature Rollout
+    runs-on: ubuntu-latest
+    needs: manage-feature-flags
+    if: inputs.rollout_percentage < 100
+    
+    steps:
+      - name: Schedule progressive rollout
+        run: |
+          # Create CronJob for progressive rollout
+          kubectl apply -f - <<EOF
+          apiVersion: batch/v1
+          kind: CronJob
+          metadata:
+            name: feature-rollout-${{ inputs.feature_name }}
+            namespace: ${{ inputs.environment }}
+          spec:
+            schedule: "0 */2 * * *"  # Every 2 hours
+            jobTemplate:
+              spec:
+                template:
+                  spec:
+                    containers:
+                    - name: rollout-manager
+                      image: unleash/unleash-client:latest
+                      command:
+                      - /bin/sh
+                      - -c
+                      - |
+                        # Get current rollout percentage
+                        current=$(curl -s "${{ vars.UNLEASH_URL }}/api/admin/features/${{ inputs.feature_name }}" \
+                          -H "Authorization: ${{ secrets.UNLEASH_API_KEY }}" | \
+                          jq -r '.strategies[0].parameters.percentage')
+                        
+                        # Check metrics
+                        if ./check-feature-metrics.sh "${{ inputs.feature_name }}"; then
+                          # Increase by 10% if metrics are good
+                          new_percentage=$((current + 10))
+                          if [ $new_percentage -gt 100 ]; then
+                            new_percentage=100
+                          fi
+                          
+                          # Update rollout percentage
+                          curl -X PUT "${{ vars.UNLEASH_URL }}/api/admin/features/${{ inputs.feature_name }}/strategies/0" \
+                            -H "Authorization: ${{ secrets.UNLEASH_API_KEY }}" \
+                            -H "Content-Type: application/json" \
+                            -d "{
+                              \"name\": \"gradualRolloutUserId\",
+                              \"parameters\": {
+                                \"percentage\": \"$new_percentage\"
+                              }
+                            }"
+                        else
+                          echo "Metrics check failed, halting rollout"
+                        fi
+                    restartPolicy: OnFailure
+          EOF
+
+  feature-flag-sdk-integration:
+    name: SDK Integration Examples
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Generate SDK integration examples
+        run: |
+          # Python/FastAPI integration
+          cat <<'EOF' > python-feature-flags.py
+          from unleash import UnleashClient
+          from functools import wraps
+          import os
+          
+          # Initialize Unleash client
+          unleash_client = UnleashClient(
+              url=os.getenv("UNLEASH_URL"),
+              app_name=os.getenv("UNLEASH_APP_NAME"),
+              environment=os.getenv("UNLEASH_ENVIRONMENT"),
+              custom_headers={"Authorization": os.getenv("UNLEASH_API_KEY")}
+          )
+          unleash_client.initialize_client()
+          
+          def feature_flag(flag_name, default=False):
+              """Decorator for feature flag protected endpoints"""
+              def decorator(func):
+                  @wraps(func)
+                  async def wrapper(*args, **kwargs):
+                      if unleash_client.is_enabled(flag_name, default=default):
+                          return await func(*args, **kwargs)
+                      else:
+                          return {"error": "Feature not enabled"}, 403
+                  return wrapper
+              return decorator
+          
+          # Usage example
+          @app.get("/new-feature")
+          @feature_flag("new-feature-flag")
+          async def new_feature():
+              return {"message": "New feature is enabled!"}
+          EOF
+          
+          # TypeScript/React integration
+          cat <<'EOF' > react-feature-flags.tsx
+          import { UnleashClient } from 'unleash-proxy-client';
+          import React, { createContext, useContext, useEffect, useState } from 'react';
+          
+          const unleashClient = new UnleashClient({
+            url: process.env.REACT_APP_UNLEASH_URL,
+            clientKey: process.env.REACT_APP_UNLEASH_CLIENT_KEY,
+            appName: process.env.REACT_APP_NAME,
+            environment: process.env.NODE_ENV
+          });
+          
+          const FeatureFlagContext = createContext<UnleashClient>(unleashClient);
+          
+          export const FeatureFlagProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+            const [isReady, setIsReady] = useState(false);
+            
+            useEffect(() => {
+              unleashClient.start();
+              unleashClient.on('ready', () => setIsReady(true));
+              
+              return () => {
+                unleashClient.stop();
+              };
+            }, []);
+            
+            if (!isReady) return <div>Loading feature flags...</div>;
+            
+            return (
+              <FeatureFlagContext.Provider value={unleashClient}>
+                {children}
+              </FeatureFlagContext.Provider>
+            );
+          };
+          
+          export const useFeatureFlag = (flagName: string): boolean => {
+            const client = useContext(FeatureFlagContext);
+            return client.isEnabled(flagName);
+          };
+          
+          // Usage example
+          export const NewFeature: React.FC = () => {
+            const isEnabled = useFeatureFlag('new-feature-flag');
+            
+            if (!isEnabled) return null;
+            
+            return <div>New feature is enabled!</div>;
+          };
+          EOF

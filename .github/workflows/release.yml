@@ -1,0 +1,655 @@
+name: Automated Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+      skip_tests:
+        description: 'Skip tests (emergency release only)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: write
+  packages: write
+  deployments: write
+  actions: read
+
+jobs:
+  # Pre-release validation
+  pre-release-checks:
+    name: Pre-Release Validation
+    runs-on: ubuntu-latest
+    if: |
+      github.event.inputs.skip_tests != 'true' ||
+      github.event_name != 'workflow_dispatch'
+    timeout-minutes: 30
+    outputs:
+      should_release: ${{ steps.validation.outputs.should_release }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: |
+          npm run test:run
+          npm run build
+
+      - name: Run backend tests
+        run: |
+          for service in services/*/; do
+            if [ -f "$service/requirements.txt" ] && [ -d "$service/tests" ]; then
+              echo "Testing $service"
+              cd "$service"
+              pip install -r requirements.txt
+              if [ -f requirements-test.txt ]; then
+                pip install -r requirements-test.txt
+              fi
+              pytest tests/ --tb=short || test_failed=true
+              cd - > /dev/null
+            fi
+          done
+          
+          if [ "$test_failed" = "true" ]; then
+            echo "::error::Backend tests failed"
+            exit 1
+          fi
+
+      - name: Check for breaking changes
+        id: breaking-changes
+        run: |
+          # Check for breaking changes in API contracts
+          breaking_changes=false
+          
+          # Check if OpenAPI specs have breaking changes
+          if [ -d "shared/contracts/openapi" ]; then
+            # Use openapi-diff or similar tool if available
+            echo "Checking for API breaking changes..."
+            # This is a placeholder - implement based on your API versioning strategy
+          fi
+          
+          echo "breaking_changes=$breaking_changes" >> $GITHUB_OUTPUT
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual release - determine version based on input
+            current_version=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            current_version=${current_version#v}
+            
+            case "${{ github.event.inputs.release_type }}" in
+              "major")
+                new_version=$(echo $current_version | awk -F. '{print ($1+1)".0.0"}')
+                ;;
+              "minor")
+                new_version=$(echo $current_version | awk -F. '{print $1"."($2+1)".0"}')
+                ;;
+              "patch")
+                new_version=$(echo $current_version | awk -F. '{print $1"."$2"."($3+1)}')
+                ;;
+              "prerelease")
+                new_version=$(echo $current_version | awk -F. '{print $1"."$2"."($3+1)"-rc.1"}')
+                ;;
+            esac
+          else
+            # Auto release - analyze commits for conventional commits
+            current_version=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            current_version=${current_version#v}
+            
+            # Get commits since last tag
+            if [ "$(git tag -l)" ]; then
+              commits=$(git log $(git describe --tags --abbrev=0)..HEAD --oneline)
+            else
+              commits=$(git log --oneline)
+            fi
+            
+            # Analyze commit messages for conventional commits
+            has_breaking=false
+            has_feat=false
+            has_fix=false
+            
+            echo "$commits" | while IFS= read -r commit; do
+              if echo "$commit" | grep -q "BREAKING CHANGE\|!:"; then
+                has_breaking=true
+              elif echo "$commit" | grep -q "^[a-f0-9]* feat"; then
+                has_feat=true
+              elif echo "$commit" | grep -q "^[a-f0-9]* fix"; then
+                has_fix=true
+              fi
+            done
+            
+            if [ "$has_breaking" = "true" ]; then
+              new_version=$(echo $current_version | awk -F. '{print ($1+1)".0.0"}')
+            elif [ "$has_feat" = "true" ]; then
+              new_version=$(echo $current_version | awk -F. '{print $1"."($2+1)".0"}')
+            elif [ "$has_fix" = "true" ]; then
+              new_version=$(echo $current_version | awk -F. '{print $1"."$2"."($3+1)}')
+            else
+              new_version=$current_version
+            fi
+          fi
+          
+          echo "version=v$new_version" >> $GITHUB_OUTPUT
+          echo "New version will be: v$new_version"
+
+      - name: Validate release
+        id: validation
+        run: |
+          should_release=true
+          
+          # Don't release if version hasn't changed
+          current_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          if [ "${{ steps.version.outputs.version }}" = "$current_tag" ]; then
+            echo "No version change detected, skipping release"
+            should_release=false
+          fi
+          
+          # Don't release if there are no commits since last tag (for auto releases)
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            if [ "$(git tag -l)" ] && [ -z "$(git log $(git describe --tags --abbrev=0)..HEAD --oneline)" ]; then
+              echo "No commits since last tag, skipping release"
+              should_release=false
+            fi
+          fi
+          
+          echo "should_release=$should_release" >> $GITHUB_OUTPUT
+
+  # Build release artifacts
+  build-artifacts:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: pre-release-checks
+    if: |
+      needs.pre-release-checks.outputs.should_release == 'true' ||
+      github.event.inputs.skip_tests == 'true'
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        platform: [frontend, backend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (Frontend)
+        if: matrix.platform == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python (Backend)
+        if: matrix.platform == 'backend'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build frontend
+        if: matrix.platform == 'frontend'
+        working-directory: frontend
+        run: |
+          npm ci --prefer-offline --no-audit
+          npm run build
+          
+          # Create release package
+          tar -czf ../frontend-build.tar.gz -C dist .
+          
+          # Generate build info
+          echo "{
+            \"version\": \"${{ needs.pre-release-checks.outputs.version || github.sha }}\",
+            \"build_time\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+            \"commit\": \"${{ github.sha }}\",
+            \"branch\": \"${{ github.ref_name }}\"
+          }" > ../frontend-build-info.json
+
+      - name: Build backend services
+        if: matrix.platform == 'backend'
+        run: |
+          # Build Docker images for each service
+          for service in services/*/; do
+            service_name=$(basename "$service")
+            echo "Building $service_name"
+            
+            if [ -f "$service/Dockerfile" ]; then
+              docker build -t "${service_name}:${{ needs.pre-release-checks.outputs.version || github.sha }}" "$service"
+              docker save "${service_name}:${{ needs.pre-release-checks.outputs.version || github.sha }}" | gzip > "${service_name}-image.tar.gz"
+            fi
+          done
+          
+          # Generate backend build info
+          echo "{
+            \"version\": \"${{ needs.pre-release-checks.outputs.version || github.sha }}\",
+            \"build_time\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+            \"commit\": \"${{ github.sha }}\",
+            \"branch\": \"${{ github.ref_name }}\",
+            \"services\": [\"auth-service\", \"api-gateway\", \"user-service\"]
+          }" > backend-build-info.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts-${{ matrix.platform }}
+          path: |
+            frontend-build.tar.gz
+            frontend-build-info.json
+            *-image.tar.gz
+            backend-build-info.json
+          retention-days: 90
+
+  # Create GitHub release
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [pre-release-checks, build-artifacts]
+    if: |
+      needs.pre-release-checks.outputs.should_release == 'true' ||
+      github.event.inputs.skip_tests == 'true'
+    timeout-minutes: 15
+    outputs:
+      release_id: ${{ steps.create-release.outputs.id }}
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Generate release notes
+        id: release-notes
+        run: |
+          version="${{ needs.pre-release-checks.outputs.version || github.ref_name }}"
+          
+          # Get previous tag for changelog
+          prev_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          if [ -n "$prev_tag" ]; then
+            commits=$(git log ${prev_tag}..HEAD --oneline --no-merges)
+          else
+            commits=$(git log --oneline --no-merges)
+          fi
+          
+          # Generate changelog
+          changelog="## What's Changed\n\n"
+          
+          # Categorize commits
+          features=""
+          fixes=""
+          others=""
+          breaking=""
+          
+          echo "$commits" | while IFS= read -r commit; do
+            if echo "$commit" | grep -q "BREAKING CHANGE\|!:"; then
+              breaking="$breaking\n- $commit"
+            elif echo "$commit" | grep -q "^[a-f0-9]* feat"; then
+              features="$features\n- $commit"
+            elif echo "$commit" | grep -q "^[a-f0-9]* fix"; then
+              fixes="$fixes\n- $commit"
+            else
+              others="$others\n- $commit"
+            fi
+          done
+          
+          if [ -n "$breaking" ]; then
+            changelog="$changelog### ⚠️ Breaking Changes\n$breaking\n\n"
+          fi
+          
+          if [ -n "$features" ]; then
+            changelog="$changelog### ✨ New Features\n$features\n\n"
+          fi
+          
+          if [ -n "$fixes" ]; then
+            changelog="$changelog### 🐛 Bug Fixes\n$fixes\n\n"
+          fi
+          
+          if [ -n "$others" ]; then
+            changelog="$changelog### 📝 Other Changes\n$others\n\n"
+          fi
+          
+          # Add deployment info
+          changelog="$changelog### 📦 Deployment\n\n"
+          changelog="$changelog- Frontend build: \`frontend-build.tar.gz\`\n"
+          changelog="$changelog- Backend services: Docker images included\n"
+          changelog="$changelog- Infrastructure: Update using Kubernetes manifests\n\n"
+          
+          changelog="$changelog### 🔧 Technical Details\n\n"
+          changelog="$changelog- **Commit**: \`${{ github.sha }}\`\n"
+          changelog="$changelog- **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')\n"
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            changelog="$changelog- **Release Type**: ${{ github.event.inputs.release_type }}\n"
+          fi
+          
+          echo "$changelog" > release-notes.md
+          echo "Generated release notes for $version"
+
+      - name: Create release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.pre-release-checks.outputs.version || github.ref_name }}
+          release_name: Release ${{ needs.pre-release-checks.outputs.version || github.ref_name }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(needs.pre-release-checks.outputs.version, 'rc') || contains(needs.pre-release-checks.outputs.version, 'alpha') || contains(needs.pre-release-checks.outputs.version, 'beta') }}
+
+      - name: Upload frontend build to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+          asset_path: artifacts/build-artifacts-frontend/frontend-build.tar.gz
+          asset_name: frontend-build.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload backend images to release
+        run: |
+          for image_file in artifacts/build-artifacts-backend/*-image.tar.gz; do
+            if [ -f "$image_file" ]; then
+              filename=$(basename "$image_file")
+              echo "Uploading $filename"
+              
+              curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Content-Type: application/gzip" \
+                --data-binary @"$image_file" \
+                "${{ steps.create-release.outputs.upload_url }}?name=$filename"
+            fi
+          done
+
+  # Publish Docker images
+  publish-images:
+    name: Publish Docker Images
+    runs-on: ubuntu-latest
+    needs: [pre-release-checks, build-artifacts]
+    if: |
+      needs.pre-release-checks.outputs.should_release == 'true' ||
+      github.event.inputs.skip_tests == 'true'
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        service: [auth-service, api-gateway, user-service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ needs.pre-release-checks.outputs.version }},enable=${{ needs.pre-release-checks.outputs.version != '' }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.pre-release-checks.outputs.version || github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VCS_REF=${{ github.sha }}
+
+  # Deploy to production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [create-release, publish-images]
+    if: |
+      (needs.pre-release-checks.outputs.should_release == 'true' ||
+       github.event.inputs.skip_tests == 'true') &&
+      !contains(needs.pre-release-checks.outputs.version, 'rc') &&
+      !contains(needs.pre-release-checks.outputs.version, 'alpha') &&
+      !contains(needs.pre-release-checks.outputs.version, 'beta')
+    environment:
+      name: production
+      url: https://yourapp.com
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ vars.PROD_CLUSTER_NAME }}
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts-frontend
+          path: frontend-artifacts/
+
+      - name: Deploy frontend to S3
+        run: |
+          # Extract and deploy frontend
+          mkdir -p frontend-dist
+          tar -xzf frontend-artifacts/frontend-build.tar.gz -C frontend-dist/
+          
+          aws s3 sync frontend-dist/ s3://${{ vars.PROD_S3_BUCKET }}/ --delete
+          aws cloudfront create-invalidation --distribution-id ${{ vars.PROD_CLOUDFRONT_ID }} --paths "/*"
+
+      - name: Update Kubernetes image tags
+        run: |
+          version="${{ needs.pre-release-checks.outputs.version || github.sha }}"
+          
+          # Update image tags in Kubernetes manifests
+          cd infrastructure/k8s/overlays/prod/
+          
+          # Update kustomization.yaml with new image tags
+          for service in auth-service api-gateway user-service; do
+            sed -i "s|${REGISTRY}/${GITHUB_REPOSITORY}/${service}:.*|${REGISTRY}/${GITHUB_REPOSITORY}/${service}:${version}|g" kustomization.yaml
+          done
+
+      - name: Deploy to Kubernetes
+        run: |
+          # Apply blue-green deployment
+          kubectl apply -k infrastructure/k8s/overlays/prod/
+          
+          # Wait for rollout to complete
+          kubectl rollout status deployment/auth-service -n production --timeout=600s
+          kubectl rollout status deployment/api-gateway -n production --timeout=600s
+          kubectl rollout status deployment/user-service -n production --timeout=600s
+
+      - name: Run post-deployment tests
+        run: |
+          # Wait for services to be ready
+          sleep 30
+          
+          # Run smoke tests
+          kubectl run smoke-test-${{ github.run_number }} \
+            --image=curlimages/curl \
+            --rm -i --restart=Never \
+            --timeout=60s -- \
+            sh -c "
+              curl -f http://api-gateway-service.production.svc.cluster.local/health &&
+              curl -f http://auth-service.production.svc.cluster.local/health
+            " || deployment_failed=true
+          
+          if [ "$deployment_failed" = "true" ]; then
+            echo "::error::Post-deployment tests failed"
+            exit 1
+          fi
+
+      - name: Update release with deployment info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: '${{ needs.pre-release-checks.outputs.version || github.ref_name }}'
+            });
+            
+            const deploymentInfo = `
+
+            ## 🚀 Deployment Status
+
+            **Status**: ✅ Successfully deployed to production
+            **Deployment Time**: ${new Date().toISOString()}
+            **Frontend URL**: https://yourapp.com
+            **API Gateway**: https://api.yourapp.com
+
+            ### Services Deployed
+            - ✅ Auth Service
+            - ✅ API Gateway  
+            - ✅ User Service
+            - ✅ Frontend Application
+            `;
+            
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body: release.body + deploymentInfo
+            });
+
+  # Notification and cleanup
+  post-release:
+    name: Post-Release Actions
+    runs-on: ubuntu-latest
+    needs: [create-release, deploy-production]
+    if: always() && (needs.create-release.result == 'success')
+    timeout-minutes: 10
+
+    steps:
+      - name: Notify teams
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          channel: '#releases'
+          custom_payload: |
+            {
+              text: "🚀 New release deployed!",
+              attachments: [{
+                color: '${{ needs.deploy-production.result == 'success' && 'good' || 'danger' }}',
+                fields: [{
+                  title: 'Version',
+                  value: '${{ needs.pre-release-checks.outputs.version || github.ref_name }}',
+                  short: true
+                }, {
+                  title: 'Environment',
+                  value: 'Production',
+                  short: true
+                }, {
+                  title: 'Status',
+                  value: '${{ needs.deploy-production.result == 'success' && 'Success' || 'Failed' }}',
+                  short: true
+                }, {
+                  title: 'Release Notes',
+                  value: 'https://github.com/${{ github.repository }}/releases/tag/${{ needs.pre-release-checks.outputs.version || github.ref_name }}',
+                  short: false
+                }]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Create Jira release (if applicable)
+        if: vars.JIRA_BASE_URL != ''
+        run: |
+          # Create Jira release and update tickets
+          # This is a placeholder - implement based on your Jira integration
+          echo "Would create Jira release for ${{ needs.pre-release-checks.outputs.version }}"
+
+      - name: Update documentation
+        if: needs.deploy-production.result == 'success'
+        run: |
+          # Trigger documentation update workflow
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/update-docs.yml/dispatches \
+            -d '{"ref":"main","inputs":{"version":"${{ needs.pre-release-checks.outputs.version }}"}}'
+
+      - name: Cleanup old releases
+        run: |
+          # Keep only the last 10 releases
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            | jq -r '.[10:] | .[].id' \
+            | while read release_id; do
+              curl -X DELETE \
+                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                https://api.github.com/repos/${{ github.repository }}/releases/$release_id
+            done

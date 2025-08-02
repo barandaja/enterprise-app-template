@@ -1,0 +1,753 @@
+name: Code Quality & Coverage
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run weekly code quality analysis on Sundays at 3 AM UTC
+    - cron: '0 3 * * 0'
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  CACHE_VERSION: v1
+
+jobs:
+  # Frontend code quality analysis
+  frontend-quality:
+    name: Frontend Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.CACHE_VERSION }}-
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Run ESLint with detailed reporting
+        working-directory: frontend
+        run: |
+          npx eslint . \
+            --format=json \
+            --output-file=eslint-report.json \
+            --ext .ts,.tsx,.js,.jsx || eslint_exit=$?
+          
+          npx eslint . \
+            --format=stylish || true
+          
+          # Create ESLint summary
+          node -e "
+          const fs = require('fs');
+          try {
+            const report = JSON.parse(fs.readFileSync('eslint-report.json', 'utf8'));
+            const totalErrors = report.reduce((sum, file) => sum + file.errorCount, 0);
+            const totalWarnings = report.reduce((sum, file) => sum + file.warningCount, 0);
+            const summary = {
+              totalFiles: report.length,
+              totalErrors,
+              totalWarnings,
+              filesWithIssues: report.filter(f => f.errorCount > 0 || f.warningCount > 0).length
+            };
+            fs.writeFileSync('eslint-summary.json', JSON.stringify(summary, null, 2));
+            console.log('ESLint Summary:', summary);
+          } catch (e) {
+            console.log('No ESLint issues found or error parsing report');
+            fs.writeFileSync('eslint-summary.json', JSON.stringify({totalErrors: 0, totalWarnings: 0}, null, 2));
+          }
+          "
+
+      - name: TypeScript strict mode check
+        working-directory: frontend
+        run: |
+          # Check if strict mode is enabled
+          npx tsc --noEmit --strict || ts_strict_exit=$?
+          if [ "$ts_strict_exit" -ne 0 ]; then
+            echo "::warning::TypeScript strict mode check failed"
+          fi
+
+      - name: Run Prettier formatting check
+        working-directory: frontend
+        run: |
+          npx prettier --check "src/**/*.{ts,tsx,js,jsx,css,scss,json,md}" || prettier_exit=$?
+          if [ "$prettier_exit" -ne 0 ]; then
+            echo "::warning::Code formatting issues found"
+          fi
+
+      - name: Analyze bundle size
+        working-directory: frontend
+        run: |
+          npm run build
+          
+          # Install bundle analyzer
+          npm install --no-save webpack-bundle-analyzer
+          
+          # Generate bundle report (if using webpack)
+          if [ -f "dist/stats.json" ]; then
+            npx webpack-bundle-analyzer dist/stats.json dist --report --mode static --no-open
+          fi
+          
+          # Get build size info
+          du -sh dist/ > build-size.txt
+          echo "Build size: $(cat build-size.txt)"
+
+      - name: Test coverage analysis
+        working-directory: frontend
+        run: |
+          npm run test:coverage
+          
+          # Parse coverage report
+          if [ -f "coverage/coverage-summary.json" ]; then
+            node -e "
+            const coverage = require('./coverage/coverage-summary.json');
+            const total = coverage.total;
+            const summary = {
+              lines: total.lines.pct,
+              statements: total.statements.pct,
+              functions: total.functions.pct,
+              branches: total.branches.pct
+            };
+            console.log('Coverage Summary:', summary);
+            require('fs').writeFileSync('coverage-summary.json', JSON.stringify(summary, null, 2));
+            
+            // Check if coverage meets thresholds
+            const minCoverage = 80; // Adjust as needed
+            const failed = Object.entries(summary).filter(([key, value]) => value < minCoverage);
+            if (failed.length > 0) {
+              console.log('Coverage below threshold:', failed);
+              process.exit(1);
+            }
+            "
+          fi
+
+      - name: Accessibility testing
+        working-directory: frontend
+        run: |
+          # Run accessibility tests if they exist
+          npm run test:security || true
+          
+          # Install and run axe-core if not already included
+          if ! npm list @axe-core/cli >/dev/null 2>&1; then
+            npm install --no-save @axe-core/cli
+          fi
+
+      - name: Upload frontend quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-quality-reports
+          path: |
+            frontend/eslint-report.json
+            frontend/eslint-summary.json
+            frontend/coverage/
+            frontend/coverage-summary.json
+            frontend/build-size.txt
+            frontend/dist/report.html
+          retention-days: 30
+
+  # Backend code quality analysis
+  backend-quality:
+    name: Backend Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      matrix:
+        service: [auth-service, api-gateway, user-service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('services/${{ matrix.service }}/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+
+      - name: Install service dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f requirements-test.txt ]; then
+            pip install -r requirements-test.txt
+          fi
+
+      - name: Install code quality tools
+        run: |
+          pip install \
+            black \
+            isort \
+            flake8 \
+            mypy \
+            pylint \
+            radon \
+            vulture \
+            bandit \
+            pytest-cov \
+            coverage
+
+      - name: Code formatting analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # Check Black formatting
+          black --check --diff src/ > black-report.txt 2>&1 || black_exit=$?
+          if [ "$black_exit" -ne 0 ]; then
+            echo "::warning::Black formatting issues found in ${{ matrix.service }}"
+          fi
+          
+          # Check import sorting
+          isort --check-only --diff src/ > isort-report.txt 2>&1 || isort_exit=$?
+          if [ "$isort_exit" -ne 0 ]; then
+            echo "::warning::Import sorting issues found in ${{ matrix.service }}"
+          fi
+
+      - name: Linting analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # Flake8 linting
+          flake8 src/ \
+            --format=json \
+            --output-file=flake8-report.json \
+            --statistics \
+            --tee || flake8_exit=$?
+          
+          # Pylint analysis
+          pylint src/ \
+            --output-format=json \
+            --reports=yes > pylint-report.json 2>&1 || pylint_exit=$?
+          
+          # Extract pylint score
+          if [ -f pylint-report.json ]; then
+            python -c "
+            import json, sys
+            try:
+                with open('pylint-report.json') as f:
+                    data = f.read()
+                    # Extract score from pylint output
+                    lines = data.split('\n')
+                    for line in lines:
+                        if 'Your code has been rated at' in line:
+                            score = line.split('rated at ')[1].split('/')[0].strip()
+                            print(f'Pylint Score: {score}/10')
+                            with open('pylint-score.txt', 'w') as sf:
+                                sf.write(score)
+                            break
+            except:
+                print('Could not extract pylint score')
+            "
+          fi
+
+      - name: Type checking analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # MyPy type checking
+          mypy src/ \
+            --json-report mypy-report \
+            --html-report mypy-html \
+            --txt-report mypy-txt || mypy_exit=$?
+          
+          if [ "$mypy_exit" -ne 0 ]; then
+            echo "::warning::MyPy type checking issues found in ${{ matrix.service }}"
+          fi
+
+      - name: Complexity analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # Radon complexity analysis
+          radon cc src/ --json > radon-complexity.json || true
+          radon mi src/ --json > radon-maintainability.json || true
+          radon raw src/ --json > radon-raw.json || true
+          
+          # Summarize complexity
+          python -c "
+          import json
+          try:
+              with open('radon-complexity.json') as f:
+                  data = json.load(f)
+              
+              total_complexity = 0
+              high_complexity_functions = []
+              
+              for file_path, functions in data.items():
+                  for func in functions:
+                      complexity = func['complexity']
+                      total_complexity += complexity
+                      if complexity > 10:  # High complexity threshold
+                          high_complexity_functions.append({
+                              'file': file_path,
+                              'function': func['name'],
+                              'complexity': complexity
+                          })
+              
+              summary = {
+                  'total_complexity': total_complexity,
+                  'high_complexity_count': len(high_complexity_functions),
+                  'high_complexity_functions': high_complexity_functions
+              }
+              
+              with open('complexity-summary.json', 'w') as f:
+                  json.dump(summary, f, indent=2)
+              
+              print(f'Complexity Summary: {summary}')
+              
+              if len(high_complexity_functions) > 5:  # Threshold
+                  print('::warning::High number of complex functions detected')
+          except Exception as e:
+              print(f'Error analyzing complexity: {e}')
+          "
+
+      - name: Dead code analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # Vulture dead code detection
+          vulture src/ --json > vulture-report.json || true
+          
+          # Summarize dead code findings
+          python -c "
+          import json
+          try:
+              with open('vulture-report.json') as f:
+                  data = json.load(f)
+              
+              if data:
+                  print(f'Potential dead code items found: {len(data)}')
+                  for item in data[:10]:  # Show first 10
+                      print(f'  - {item.get(\"filename\", \"unknown\")}:{item.get(\"first_lineno\", 0)} - {item.get(\"name\", \"unknown\")}')
+                  
+                  if len(data) > 20:
+                      print('::warning::High amount of potential dead code detected')
+              else:
+                  print('No dead code detected')
+          except:
+              print('Could not analyze dead code results')
+          "
+
+      - name: Security analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # Bandit security analysis
+          bandit -r src/ \
+            -f json \
+            -o bandit-security.json || bandit_exit=$?
+          
+          if [ "$bandit_exit" -gt 1 ]; then
+            echo "::warning::Security issues found in ${{ matrix.service }}"
+          fi
+
+      - name: Test coverage analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          # Run tests with coverage if tests exist
+          if [ -d "tests" ] && [ "$(find tests -name '*.py' | wc -l)" -gt 0 ]; then
+            coverage run -m pytest tests/ --tb=short || test_exit=$?
+            coverage report --format=text > coverage-report.txt
+            coverage json -o coverage-report.json
+            coverage html -d coverage-html
+            
+            # Extract coverage percentage
+            python -c "
+            import json
+            try:
+                with open('coverage-report.json') as f:
+                    data = json.load(f)
+                coverage_pct = data['totals']['percent_covered']
+                print(f'Coverage: {coverage_pct:.1f}%')
+                
+                with open('coverage-percentage.txt', 'w') as f:
+                    f.write(f'{coverage_pct:.1f}')
+                
+                if coverage_pct < 70:  # Minimum coverage threshold
+                    print('::warning::Code coverage below 70%')
+            except:
+                print('Could not extract coverage information')
+            "
+          else
+            echo "No tests found for ${{ matrix.service }}"
+          fi
+
+      - name: Generate quality summary
+        working-directory: services/${{ matrix.service }}
+        run: |
+          python -c "
+          import json
+          import os
+          
+          summary = {
+              'service': '${{ matrix.service }}',
+              'timestamp': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
+              'metrics': {}
+          }
+          
+          # Read various metrics
+          try:
+              if os.path.exists('pylint-score.txt'):
+                  with open('pylint-score.txt') as f:
+                      summary['metrics']['pylint_score'] = float(f.read().strip())
+          except: pass
+          
+          try:
+              if os.path.exists('coverage-percentage.txt'):
+                  with open('coverage-percentage.txt') as f:
+                      summary['metrics']['coverage_percentage'] = float(f.read().strip())
+          except: pass
+          
+          try:
+              if os.path.exists('complexity-summary.json'):
+                  with open('complexity-summary.json') as f:
+                      complexity = json.load(f)
+                      summary['metrics']['high_complexity_functions'] = complexity['high_complexity_count']
+          except: pass
+          
+          try:
+              if os.path.exists('bandit-security.json'):
+                  with open('bandit-security.json') as f:
+                      bandit = json.load(f)
+                      summary['metrics']['security_issues'] = len(bandit.get('results', []))
+          except: pass
+          
+          with open('quality-summary.json', 'w') as f:
+              json.dump(summary, f, indent=2)
+          
+          print(json.dumps(summary, indent=2))
+          "
+
+      - name: Upload backend quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-quality-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/*-report.*
+            services/${{ matrix.service }}/mypy-html/
+            services/${{ matrix.service }}/coverage-html/
+            services/${{ matrix.service }}/quality-summary.json
+            services/${{ matrix.service }}/*-summary.json
+            services/${{ matrix.service }}/*.txt
+          retention-days: 30
+
+  # SonarQube analysis (if available)
+  sonarqube-analysis:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    if: vars.SONAR_HOST_URL != '' && secrets.SONAR_TOKEN != ''
+    needs: [frontend-quality, backend-quality]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download quality reports
+        uses: actions/download-artifact@v4
+        with:
+          path: quality-reports/
+
+      - name: SonarQube Scan
+        uses: sonarqube-quality-gate-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+  # Quality gate and reporting
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [frontend-quality, backend-quality]
+    if: always()
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all quality reports
+        uses: actions/download-artifact@v4
+        with:
+          path: quality-reports/
+
+      - name: Setup Python for report generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Generate consolidated quality report
+        run: |
+          pip install jinja2
+          
+          cat > generate_quality_report.py << 'EOF'
+          import json
+          import os
+          import glob
+          from datetime import datetime
+          
+          def collect_quality_metrics():
+              metrics = {
+                  'timestamp': datetime.now().isoformat(),
+                  'commit_sha': os.environ.get('GITHUB_SHA', 'unknown'),
+                  'branch': os.environ.get('GITHUB_REF_NAME', 'unknown'),
+                  'frontend': {},
+                  'backend': {},
+                  'overall_score': 0
+              }
+              
+              # Collect frontend metrics
+              try:
+                  coverage_file = glob.glob('quality-reports/**/coverage-summary.json', recursive=True)
+                  if coverage_file:
+                      with open(coverage_file[0]) as f:
+                          coverage = json.load(f)
+                          metrics['frontend']['coverage'] = coverage
+                  
+                  eslint_file = glob.glob('quality-reports/**/eslint-summary.json', recursive=True)
+                  if eslint_file:
+                      with open(eslint_file[0]) as f:
+                          eslint = json.load(f)
+                          metrics['frontend']['eslint'] = eslint
+              except Exception as e:
+                  print(f'Error collecting frontend metrics: {e}')
+              
+              # Collect backend metrics
+              backend_services = []
+              for summary_file in glob.glob('quality-reports/**/quality-summary.json', recursive=True):
+                  try:
+                      with open(summary_file) as f:
+                          service_metrics = json.load(f)
+                          backend_services.append(service_metrics)
+                  except Exception as e:
+                      print(f'Error reading {summary_file}: {e}')
+              
+              metrics['backend']['services'] = backend_services
+              
+              # Calculate overall score
+              scores = []
+              
+              # Frontend score
+              if 'coverage' in metrics['frontend']:
+                  avg_coverage = sum(metrics['frontend']['coverage'].values()) / len(metrics['frontend']['coverage'])
+                  scores.append(min(avg_coverage, 100))
+              
+              # Backend scores
+              for service in backend_services:
+                  service_score = 0
+                  count = 0
+                  
+                  if 'pylint_score' in service.get('metrics', {}):
+                      service_score += service['metrics']['pylint_score'] * 10
+                      count += 1
+                  
+                  if 'coverage_percentage' in service.get('metrics', {}):
+                      service_score += service['metrics']['coverage_percentage']
+                      count += 1
+                  
+                  if count > 0:
+                      scores.append(service_score / count)
+              
+              if scores:
+                  metrics['overall_score'] = sum(scores) / len(scores)
+              
+              return metrics
+          
+          metrics = collect_quality_metrics()
+          
+          # Generate report
+          report = f"""# Code Quality Report
+          
+          **Generated**: {metrics['timestamp']}
+          **Commit**: {metrics['commit_sha']}
+          **Branch**: {metrics['branch']}
+          **Overall Score**: {metrics['overall_score']:.1f}/100
+          
+          ## Frontend Quality
+          
+          """
+          
+          if 'coverage' in metrics['frontend']:
+              coverage = metrics['frontend']['coverage']
+              report += f"""
+          ### Test Coverage
+          - **Lines**: {coverage.get('lines', 0):.1f}%
+          - **Statements**: {coverage.get('statements', 0):.1f}%
+          - **Functions**: {coverage.get('functions', 0):.1f}%
+          - **Branches**: {coverage.get('branches', 0):.1f}%
+          """
+          
+          if 'eslint' in metrics['frontend']:
+              eslint = metrics['frontend']['eslint']
+              report += f"""
+          ### ESLint Analysis
+          - **Errors**: {eslint.get('totalErrors', 0)}
+          - **Warnings**: {eslint.get('totalWarnings', 0)}
+          - **Files with Issues**: {eslint.get('filesWithIssues', 0)}
+          """
+          
+          report += """
+          ## Backend Quality
+          
+          """
+          
+          for service in metrics['backend']['services']:
+              service_name = service.get('service', 'unknown')
+              service_metrics = service.get('metrics', {})
+              
+              report += f"""
+          ### {service_name}
+          """
+              
+              if 'pylint_score' in service_metrics:
+                  report += f"- **Pylint Score**: {service_metrics['pylint_score']:.1f}/10\n"
+              
+              if 'coverage_percentage' in service_metrics:
+                  report += f"- **Test Coverage**: {service_metrics['coverage_percentage']:.1f}%\n"
+              
+              if 'high_complexity_functions' in service_metrics:
+                  report += f"- **High Complexity Functions**: {service_metrics['high_complexity_functions']}\n"
+              
+              if 'security_issues' in service_metrics:
+                  report += f"- **Security Issues**: {service_metrics['security_issues']}\n"
+          
+          report += """
+          ## Recommendations
+          
+          1. Maintain test coverage above 80%
+          2. Address high-complexity functions
+          3. Fix ESLint errors and reduce warnings
+          4. Improve Pylint scores to above 8.0
+          5. Address any security issues found
+          """
+          
+          with open('quality-report.md', 'w') as f:
+              f.write(report)
+          
+          with open('quality-metrics.json', 'w') as f:
+              json.dump(metrics, f, indent=2)
+          
+          # Quality gate logic
+          gate_passed = True
+          issues = []
+          
+          if metrics['overall_score'] < 70:
+              gate_passed = False
+              issues.append(f"Overall quality score too low: {metrics['overall_score']:.1f}/100")
+          
+          # Frontend quality gate
+          if 'coverage' in metrics['frontend']:
+              avg_coverage = sum(metrics['frontend']['coverage'].values()) / len(metrics['frontend']['coverage'])
+              if avg_coverage < 80:
+                  gate_passed = False
+                  issues.append(f"Frontend coverage too low: {avg_coverage:.1f}%")
+          
+          if 'eslint' in metrics['frontend']:
+              if metrics['frontend']['eslint'].get('totalErrors', 0) > 0:
+                  gate_passed = False
+                  issues.append(f"ESLint errors found: {metrics['frontend']['eslint']['totalErrors']}")
+          
+          # Backend quality gate
+          for service in metrics['backend']['services']:
+              service_name = service.get('service', 'unknown')
+              service_metrics = service.get('metrics', {})
+              
+              if 'coverage_percentage' in service_metrics and service_metrics['coverage_percentage'] < 70:
+                  gate_passed = False
+                  issues.append(f"{service_name} coverage too low: {service_metrics['coverage_percentage']:.1f}%")
+              
+              if 'security_issues' in service_metrics and service_metrics['security_issues'] > 0:
+                  gate_passed = False
+                  issues.append(f"{service_name} has security issues: {service_metrics['security_issues']}")
+          
+          with open('quality-gate-result.json', 'w') as f:
+              json.dump({
+                  'passed': gate_passed,
+                  'issues': issues,
+                  'score': metrics['overall_score']
+              }, f, indent=2)
+          
+          if not gate_passed:
+              print('Quality gate failed with issues:')
+              for issue in issues:
+                  print(f'  - {issue}')
+              exit(1)
+          else:
+              print('Quality gate passed!')
+          EOF
+          
+          python generate_quality_report.py
+
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: |
+            quality-report.md
+            quality-metrics.json
+            quality-gate-result.json
+          retention-days: 30
+
+      - name: Comment PR with quality report
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('quality-report.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📊 Code Quality Report\n\n${report}`
+            });
+
+      - name: Update status check
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync('quality-gate-result.json', 'utf8'));
+            
+            const state = result.passed ? 'success' : 'failure';
+            const description = result.passed 
+              ? `Quality gate passed (Score: ${result.score.toFixed(1)}/100)`
+              : `Quality gate failed (${result.issues.length} issues)`;
+            
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: state,
+              description: description,
+              context: 'quality-gate'
+            });

@@ -1,0 +1,228 @@
+name: API Versioning and Compatibility
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      api_version:
+        required: true
+        type: string
+        description: 'API version (e.g., v1, v2)'
+      deprecation_date:
+        required: false
+        type: string
+        description: 'Date when older version will be deprecated'
+
+jobs:
+  validate-api-compatibility:
+    name: Validate API Compatibility
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comparison
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install API diff tools
+        run: |
+          npm install -g @openapitools/openapi-diff
+          npm install -g @stoplight/spectral-cli
+          npm install -g swagger-cli
+      
+      - name: Extract OpenAPI specs
+        run: |
+          # Extract current version spec
+          docker run --rm -v $PWD:/work \
+            -e SERVICE=${{ inputs.service }} \
+            -e VERSION=${{ inputs.api_version }} \
+            ghcr.io/${{ github.repository }}/${{ inputs.service }}:${{ github.sha }} \
+            python -c "
+          from src.main import app
+          import json
+          spec = app.openapi()
+          with open('/work/openapi-current.json', 'w') as f:
+              json.dump(spec, f, indent=2)
+          "
+          
+          # Extract previous version spec
+          if [ "${{ inputs.api_version }}" != "v1" ]; then
+            PREV_VERSION=$(echo "${{ inputs.api_version }}" | sed 's/v\([0-9]*\)/v\$((\1-1))/')
+            git checkout $(git describe --tags --match "${PREV_VERSION}*" --abbrev=0)
+            
+            docker run --rm -v $PWD:/work \
+              -e SERVICE=${{ inputs.service }} \
+              -e VERSION=$PREV_VERSION \
+              ghcr.io/${{ github.repository }}/${{ inputs.service }}:latest \
+              python -c "
+            from src.main import app
+            import json
+            spec = app.openapi()
+            with open('/work/openapi-previous.json', 'w') as f:
+                json.dump(spec, f, indent=2)
+            "
+          fi
+      
+      - name: Validate OpenAPI spec
+        run: |
+          # Validate spec structure
+          swagger-cli validate openapi-current.json
+          
+          # Run spectral linting
+          spectral lint openapi-current.json --ruleset .spectral.yml
+      
+      - name: Check breaking changes
+        if: inputs.api_version != 'v1'
+        run: |
+          # Compare APIs for breaking changes
+          openapi-diff openapi-previous.json openapi-current.json \
+            --fail-on-incompatible \
+            --markdown api-diff-report.md
+          
+          # Upload diff report
+          if [ -f api-diff-report.md ]; then
+            echo "## API Compatibility Report" >> $GITHUB_STEP_SUMMARY
+            cat api-diff-report.md >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Generate version routing config
+        run: |
+          # Create Istio VirtualService for API versioning
+          cat <<EOF > api-version-routing.yaml
+          apiVersion: networking.istio.io/v1beta1
+          kind: VirtualService
+          metadata:
+            name: ${{ inputs.service }}-api-versions
+            namespace: production
+          spec:
+            hosts:
+            - api.example.com
+            http:
+            - match:
+              - headers:
+                  api-version:
+                    exact: "${{ inputs.api_version }}"
+              - uri:
+                  prefix: "/api/${{ inputs.api_version }}/"
+              route:
+              - destination:
+                  host: ${{ inputs.service }}
+                  subset: ${{ inputs.api_version }}
+            - match:
+              - uri:
+                  prefix: "/api/latest/"
+              route:
+              - destination:
+                  host: ${{ inputs.service }}
+                  subset: ${{ inputs.api_version }}
+          EOF
+      
+      - name: Update API documentation
+        run: |
+          # Generate API documentation
+          mkdir -p docs/api/${{ inputs.api_version }}
+          
+          # Convert OpenAPI to HTML documentation
+          docker run --rm -v $PWD:/work \
+            swaggerapi/swagger-ui:latest \
+            generate -i /work/openapi-current.json \
+            -o /work/docs/api/${{ inputs.api_version }}
+      
+      - name: Create deprecation notices
+        if: inputs.deprecation_date != ''
+        run: |
+          # Add deprecation headers to older versions
+          cat <<EOF > deprecation-middleware.py
+          from datetime import datetime
+          
+          DEPRECATION_DATE = "${{ inputs.deprecation_date }}"
+          
+          async def add_deprecation_headers(request, call_next):
+              response = await call_next(request)
+              if request.url.path.startswith("/api/v1/"):
+                  response.headers["Deprecation"] = f"date='{DEPRECATION_DATE}'"
+                  response.headers["Sunset"] = DEPRECATION_DATE
+                  response.headers["Link"] = '</api/${{ inputs.api_version }}>; rel="successor-version"'
+              return response
+          EOF
+
+  deploy-versioned-api:
+    name: Deploy Versioned API
+    runs-on: ubuntu-latest
+    needs: validate-api-compatibility
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Deploy version-specific service
+        run: |
+          # Create versioned deployment
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${{ inputs.service }}-${{ inputs.api_version }}
+            namespace: production
+            labels:
+              app: ${{ inputs.service }}
+              version: ${{ inputs.api_version }}
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: ${{ inputs.service }}
+                version: ${{ inputs.api_version }}
+            template:
+              metadata:
+                labels:
+                  app: ${{ inputs.service }}
+                  version: ${{ inputs.api_version }}
+              spec:
+                containers:
+                - name: ${{ inputs.service }}
+                  image: ghcr.io/${{ github.repository }}/${{ inputs.service }}:${{ github.sha }}
+                  env:
+                  - name: API_VERSION
+                    value: "${{ inputs.api_version }}"
+                  - name: DEPRECATION_DATE
+                    value: "${{ inputs.deprecation_date }}"
+          EOF
+      
+      - name: Update API Gateway configuration
+        run: |
+          # Update Kong/API Gateway routes
+          curl -X POST http://api-gateway-admin:8001/services/${{ inputs.service }}-${{ inputs.api_version }}/routes \
+            -d "paths[]=/api/${{ inputs.api_version }}" \
+            -d "strip_path=false" \
+            -d "preserve_host=true"
+      
+      - name: Monitor version adoption
+        run: |
+          # Set up metrics for version tracking
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-api-version-queries
+            namespace: monitoring
+          data:
+            queries.yaml: |
+              - name: api_version_usage
+                query: |
+                  sum by (version) (
+                    rate(http_requests_total{service="${{ inputs.service }}"}[5m])
+                  )
+              - name: api_version_errors
+                query: |
+                  sum by (version, status) (
+                    rate(http_requests_total{service="${{ inputs.service }}", status=~"5.."}[5m])
+                  )
+          EOF

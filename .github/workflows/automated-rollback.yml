@@ -1,0 +1,406 @@
+name: Automated Rollback Procedures
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      deployment_id:
+        required: true
+        type: string
+      rollback_trigger:
+        required: true
+        type: string
+        description: 'Reason for rollback: metrics, health_check, manual'
+    secrets:
+      SLACK_WEBHOOK:
+        required: true
+      PAGERDUTY_TOKEN:
+        required: false
+
+jobs:
+  evaluate-rollback-need:
+    name: Evaluate Rollback Need
+    runs-on: ubuntu-latest
+    outputs:
+      should_rollback: ${{ steps.evaluate.outputs.should_rollback }}
+      rollback_reason: ${{ steps.evaluate.outputs.rollback_reason }}
+      previous_version: ${{ steps.evaluate.outputs.previous_version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup monitoring tools
+        run: |
+          # Install monitoring CLI tools
+          curl -LO https://github.com/prometheus/prometheus/releases/download/v2.45.0/promtool
+          chmod +x promtool
+          sudo mv promtool /usr/local/bin/
+      
+      - name: Evaluate deployment health
+        id: evaluate
+        run: |
+          SERVICE="${{ inputs.service }}"
+          ENV="${{ inputs.environment }}"
+          
+          # Initialize rollback decision
+          SHOULD_ROLLBACK="false"
+          ROLLBACK_REASON=""
+          
+          # Function to query Prometheus
+          query_prometheus() {
+            local query="$1"
+            kubectl exec -n monitoring deployment/prometheus -- \
+              promtool query instant "$query" 2>/dev/null | \
+              jq -r '.data.result[0].value[1] // "0"'
+          }
+          
+          # Check error rate (>5% triggers rollback)
+          ERROR_RATE=$(query_prometheus "
+            sum(rate(http_requests_total{service='$SERVICE',environment='$ENV',status=~'5..'}[5m])) / 
+            sum(rate(http_requests_total{service='$SERVICE',environment='$ENV'}[5m]))
+          ")
+          
+          if (( $(echo "$ERROR_RATE > 0.05" | bc -l) )); then
+            SHOULD_ROLLBACK="true"
+            ROLLBACK_REASON="Error rate ${ERROR_RATE} exceeds 5% threshold"
+          fi
+          
+          # Check response time (>2s p99 triggers rollback)
+          P99_LATENCY=$(query_prometheus "
+            histogram_quantile(0.99, 
+              sum(rate(http_request_duration_seconds_bucket{service='$SERVICE',environment='$ENV'}[5m])) 
+              by (le)
+            )
+          ")
+          
+          if (( $(echo "$P99_LATENCY > 2" | bc -l) )); then
+            SHOULD_ROLLBACK="true"
+            ROLLBACK_REASON="P99 latency ${P99_LATENCY}s exceeds 2s threshold"
+          fi
+          
+          # Check pod restart count
+          RESTART_COUNT=$(kubectl get pods -n $ENV -l app=$SERVICE -o json | \
+            jq '[.items[].status.containerStatuses[].restartCount] | add // 0')
+          
+          if [ "$RESTART_COUNT" -gt 5 ]; then
+            SHOULD_ROLLBACK="true"
+            ROLLBACK_REASON="Pod restart count $RESTART_COUNT exceeds threshold"
+          fi
+          
+          # Check health endpoints
+          HEALTH_CHECK_FAILED=0
+          for pod in $(kubectl get pods -n $ENV -l app=$SERVICE -o name); do
+            if ! kubectl exec -n $ENV $pod -- curl -sf http://localhost:8000/health; then
+              ((HEALTH_CHECK_FAILED++))
+            fi
+          done
+          
+          TOTAL_PODS=$(kubectl get pods -n $ENV -l app=$SERVICE --no-headers | wc -l)
+          if [ "$HEALTH_CHECK_FAILED" -gt $((TOTAL_PODS / 2)) ]; then
+            SHOULD_ROLLBACK="true"
+            ROLLBACK_REASON="Health check failed on $HEALTH_CHECK_FAILED/$TOTAL_PODS pods"
+          fi
+          
+          # Check for manual trigger
+          if [ "${{ inputs.rollback_trigger }}" == "manual" ]; then
+            SHOULD_ROLLBACK="true"
+            ROLLBACK_REASON="Manual rollback requested"
+          fi
+          
+          # Get previous version
+          PREVIOUS_VERSION=$(kubectl rollout history deployment/$SERVICE -n $ENV --revision=-2 | \
+            grep "Image:" | awk '{print $2}' | cut -d: -f2)
+          
+          # Output decision
+          echo "should_rollback=$SHOULD_ROLLBACK" >> $GITHUB_OUTPUT
+          echo "rollback_reason=$ROLLBACK_REASON" >> $GITHUB_OUTPUT
+          echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Rollback decision: $SHOULD_ROLLBACK"
+          echo "Reason: $ROLLBACK_REASON"
+          echo "Previous version: $PREVIOUS_VERSION"
+
+  execute-rollback:
+    name: Execute Rollback
+    runs-on: ubuntu-latest
+    needs: evaluate-rollback-need
+    if: needs.evaluate-rollback-need.outputs.should_rollback == 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Create rollback snapshot
+        run: |
+          # Save current state for analysis
+          kubectl get all -n ${{ inputs.environment }} -l app=${{ inputs.service }} \
+            -o yaml > rollback-snapshot-${{ inputs.deployment_id }}.yaml
+          
+          # Save logs
+          kubectl logs -n ${{ inputs.environment }} -l app=${{ inputs.service }} \
+            --tail=1000 --timestamps=true > rollback-logs-${{ inputs.deployment_id }}.log
+          
+          # Upload artifacts
+          aws s3 cp rollback-snapshot-${{ inputs.deployment_id }}.yaml \
+            s3://${{ vars.ARTIFACTS_BUCKET }}/rollbacks/
+          aws s3 cp rollback-logs-${{ inputs.deployment_id }}.log \
+            s3://${{ vars.ARTIFACTS_BUCKET }}/rollbacks/
+      
+      - name: Initiate rollback
+        id: rollback
+        run: |
+          SERVICE="${{ inputs.service }}"
+          ENV="${{ inputs.environment }}"
+          PREVIOUS_VERSION="${{ needs.evaluate-rollback-need.outputs.previous_version }}"
+          
+          echo "Rolling back $SERVICE in $ENV to version $PREVIOUS_VERSION"
+          
+          # Method 1: Kubernetes rollback
+          if kubectl rollout undo deployment/$SERVICE -n $ENV; then
+            echo "Kubernetes rollout undo successful"
+            ROLLBACK_METHOD="kubernetes_rollout"
+          else
+            # Method 2: Direct image update
+            echo "Falling back to direct image update"
+            kubectl set image deployment/$SERVICE \
+              $SERVICE=ghcr.io/${{ github.repository }}/$SERVICE:$PREVIOUS_VERSION \
+              -n $ENV
+            ROLLBACK_METHOD="direct_image_update"
+          fi
+          
+          # Wait for rollback to complete
+          kubectl rollout status deployment/$SERVICE -n $ENV --timeout=300s
+          
+          echo "rollback_method=$ROLLBACK_METHOD" >> $GITHUB_OUTPUT
+      
+      - name: Update service mesh routing
+        run: |
+          # If using Istio, update traffic routing
+          if kubectl get virtualservice ${{ inputs.service }} -n ${{ inputs.environment }} 2>/dev/null; then
+            # Route 100% traffic to stable version
+            kubectl patch virtualservice ${{ inputs.service }} -n ${{ inputs.environment }} \
+              --type merge -p '{
+                "spec": {
+                  "http": [{
+                    "route": [{
+                      "destination": {
+                        "host": "${{ inputs.service }}-service",
+                        "subset": "stable"
+                      },
+                      "weight": 100
+                    }]
+                  }]
+                }
+              }'
+          fi
+      
+      - name: Verify rollback health
+        run: |
+          SERVICE="${{ inputs.service }}"
+          ENV="${{ inputs.environment }}"
+          
+          # Wait for pods to be ready
+          kubectl wait --for=condition=ready pod -l app=$SERVICE -n $ENV --timeout=300s
+          
+          # Verify health checks
+          HEALTHY_PODS=0
+          TOTAL_PODS=$(kubectl get pods -n $ENV -l app=$SERVICE --no-headers | wc -l)
+          
+          for pod in $(kubectl get pods -n $ENV -l app=$SERVICE -o name); do
+            if kubectl exec -n $ENV $pod -- curl -sf http://localhost:8000/health; then
+              ((HEALTHY_PODS++))
+            fi
+          done
+          
+          if [ "$HEALTHY_PODS" -lt "$TOTAL_PODS" ]; then
+            echo "WARNING: Only $HEALTHY_PODS/$TOTAL_PODS pods are healthy after rollback"
+            exit 1
+          fi
+          
+          echo "Rollback verification successful: $HEALTHY_PODS/$TOTAL_PODS pods healthy"
+      
+      - name: Update feature flags
+        run: |
+          # Disable feature flags for rolled back version
+          if [ -n "${{ vars.UNLEASH_URL }}" ]; then
+            curl -X PUT "${{ vars.UNLEASH_URL }}/api/admin/features" \
+              -H "Authorization: ${{ secrets.UNLEASH_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "environment": "${{ inputs.environment }}",
+                "service": "${{ inputs.service }}",
+                "action": "disable_all_experimental"
+              }'
+          fi
+
+  post-rollback-actions:
+    name: Post-Rollback Actions
+    runs-on: ubuntu-latest
+    needs: [evaluate-rollback-need, execute-rollback]
+    if: always()
+    
+    steps:
+      - name: Create incident report
+        run: |
+          cat <<EOF > incident-report-${{ inputs.deployment_id }}.md
+          # Deployment Rollback Incident Report
+          
+          **Date**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          **Service**: ${{ inputs.service }}
+          **Environment**: ${{ inputs.environment }}
+          **Deployment ID**: ${{ inputs.deployment_id }}
+          
+          ## Rollback Reason
+          ${{ needs.evaluate-rollback-need.outputs.rollback_reason }}
+          
+          ## Actions Taken
+          1. Automated rollback triggered
+          2. Previous version restored: ${{ needs.evaluate-rollback-need.outputs.previous_version }}
+          3. Service mesh routing updated
+          4. Feature flags disabled
+          
+          ## Timeline
+          - Deployment started: ${{ github.event.deployment.created_at }}
+          - Issue detected: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          - Rollback initiated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          - Rollback completed: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          ## Metrics at Time of Rollback
+          - Error rate: Check dashboard
+          - P99 latency: Check dashboard
+          - Pod restarts: Check logs
+          
+          ## Follow-up Actions Required
+          - [ ] Root cause analysis
+          - [ ] Fix identified issues
+          - [ ] Update deployment procedures
+          - [ ] Review monitoring thresholds
+          EOF
+          
+          # Upload incident report
+          aws s3 cp incident-report-${{ inputs.deployment_id }}.md \
+            s3://${{ vars.ARTIFACTS_BUCKET }}/incidents/
+      
+      - name: Notify stakeholders
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "Deployment Rollback Executed",
+              attachments: [{
+                color: 'danger',
+                title: 'Automated Rollback Triggered',
+                fields: [
+                  {
+                    title: 'Service',
+                    value: '${{ inputs.service }}',
+                    short: true
+                  },
+                  {
+                    title: 'Environment',
+                    value: '${{ inputs.environment }}',
+                    short: true
+                  },
+                  {
+                    title: 'Reason',
+                    value: '${{ needs.evaluate-rollback-need.outputs.rollback_reason }}',
+                    short: false
+                  },
+                  {
+                    title: 'Rolled back to',
+                    value: '${{ needs.evaluate-rollback-need.outputs.previous_version }}',
+                    short: true
+                  }
+                ],
+                actions: [
+                  {
+                    type: 'button',
+                    text: 'View Incident Report',
+                    url: 'https://s3.console.aws.amazon.com/s3/object/${{ vars.ARTIFACTS_BUCKET }}/incidents/incident-report-${{ inputs.deployment_id }}.md'
+                  }
+                ]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      
+      - name: Create PagerDuty incident
+        if: inputs.environment == 'production' && env.PAGERDUTY_TOKEN != ''
+        env:
+          PAGERDUTY_TOKEN: ${{ secrets.PAGERDUTY_TOKEN }}
+        run: |
+          curl -X POST https://api.pagerduty.com/incidents \
+            -H "Authorization: Token token=$PAGERDUTY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "incident": {
+                "type": "incident",
+                "title": "Automated Rollback: ${{ inputs.service }} in ${{ inputs.environment }}",
+                "service": {
+                  "id": "${{ vars.PAGERDUTY_SERVICE_ID }}",
+                  "type": "service_reference"
+                },
+                "urgency": "high",
+                "body": {
+                  "type": "incident_body",
+                  "details": "${{ needs.evaluate-rollback-need.outputs.rollback_reason }}"
+                }
+              }
+            }'
+      
+      - name: Update deployment tracking
+        run: |
+          # Record rollback in deployment history
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: deployment-history-${{ inputs.deployment_id }}
+            namespace: ${{ inputs.environment }}
+          data:
+            deployment.json: |
+              {
+                "deployment_id": "${{ inputs.deployment_id }}",
+                "service": "${{ inputs.service }}",
+                "environment": "${{ inputs.environment }}",
+                "status": "rolled_back",
+                "rollback_reason": "${{ needs.evaluate-rollback-need.outputs.rollback_reason }}",
+                "rolled_back_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "previous_version": "${{ needs.evaluate-rollback-need.outputs.previous_version }}"
+              }
+          EOF
+
+  rollback-monitoring:
+    name: Monitor Rollback Success
+    runs-on: ubuntu-latest
+    needs: execute-rollback
+    
+    steps:
+      - name: Monitor post-rollback metrics
+        run: |
+          # Monitor for 15 minutes after rollback
+          chmod +x .github/workflows/scripts/deployment-monitoring.sh
+          
+          END_TIME=$(($(date +%s) + 900))  # 15 minutes
+          
+          while [ $(date +%s) -lt $END_TIME ]; do
+            # Check error rate is back to normal
+            ERROR_RATE=$(.github/workflows/scripts/deployment-monitoring.sh \
+              check-metric "${{ inputs.service }}" "${{ inputs.environment }}" error_rate)
+            
+            if (( $(echo "$ERROR_RATE > 0.01" | bc -l) )); then
+              echo "Warning: Error rate still elevated at $ERROR_RATE"
+            else
+              echo "Error rate normal at $ERROR_RATE"
+            fi
+            
+            sleep 60
+          done
+          
+          echo "Post-rollback monitoring complete"

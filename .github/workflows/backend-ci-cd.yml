@@ -1,0 +1,611 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'services/**'
+      - 'backend/**'
+      - 'shared/python-commons/**'
+      - '.github/workflows/backend-ci-cd.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'services/**'
+      - 'backend/**'
+      - 'shared/python-commons/**'
+      - '.github/workflows/backend-ci-cd.yml'
+
+env:
+  PYTHON_VERSION: '3.11'
+  POETRY_VERSION: '1.7.1'
+  CACHE_VERSION: v1
+
+jobs:
+  # Detect changed services
+  detect-changes:
+    name: Detect Service Changes
+    runs-on: ubuntu-latest
+    outputs:
+      auth-service: ${{ steps.changes.outputs.auth-service }}
+      api-gateway: ${{ steps.changes.outputs.api-gateway }}
+      user-service: ${{ steps.changes.outputs.user-service }}
+      python-commons: ${{ steps.changes.outputs.python-commons }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect changes
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            auth-service:
+              - 'services/auth-service/**'
+            api-gateway:
+              - 'services/api-gateway/**'
+            user-service:
+              - 'services/user-service/**'
+            python-commons:
+              - 'shared/python-commons/**'
+
+  # Security scanning for Python
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.auth-service == 'true' ||
+      needs.detect-changes.outputs.api-gateway == 'true' ||
+      needs.detect-changes.outputs.user-service == 'true' ||
+      needs.detect-changes.outputs.python-commons == 'true'
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        service: [auth-service, api-gateway, user-service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('services/${{ matrix.service }}/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+
+      - name: Install security tools
+        run: |
+          pip install bandit[toml] safety semgrep
+
+      - name: Install service dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f requirements-test.txt ]; then
+            pip install -r requirements-test.txt
+          fi
+
+      - name: Run Bandit security scan
+        working-directory: services/${{ matrix.service }}
+        run: |
+          bandit -r src/ -f json -o bandit-results.json || exit_code=$?
+          bandit -r src/ || true
+          if [ ${exit_code} -gt 1 ]; then
+            echo "::error::Bandit found high severity security issues"
+            exit 1
+          fi
+
+      - name: Run Safety check
+        working-directory: services/${{ matrix.service }}
+        run: |
+          safety check --json --output safety-results.json || exit_code=$?
+          safety check || true
+          if [ ${exit_code} -ne 0 ]; then
+            echo "::warning::Safety found vulnerabilities in dependencies"
+          fi
+
+      - name: Run Semgrep
+        working-directory: services/${{ matrix.service }}
+        run: |
+          semgrep --config=auto src/ --json --output=semgrep-results.json || exit_code=$?
+          semgrep --config=auto src/ || true
+          if [ ${exit_code} -ne 0 ]; then
+            echo "::warning::Semgrep found potential security issues"
+          fi
+
+      - name: Upload security scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/bandit-results.json
+            services/${{ matrix.service }}/safety-results.json
+            services/${{ matrix.service }}/semgrep-results.json
+          retention-days: 30
+
+  # Code quality checks
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.auth-service == 'true' ||
+      needs.detect-changes.outputs.api-gateway == 'true' ||
+      needs.detect-changes.outputs.user-service == 'true' ||
+      needs.detect-changes.outputs.python-commons == 'true'
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        service: [auth-service, api-gateway, user-service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('services/${{ matrix.service }}/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+
+      - name: Install code quality tools
+        run: |
+          pip install black isort flake8 mypy pylint
+
+      - name: Install service dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f requirements-test.txt ]; then
+            pip install -r requirements-test.txt
+          fi
+
+      - name: Run Black formatting check
+        working-directory: services/${{ matrix.service }}
+        run: black --check --diff src/
+
+      - name: Run isort import sorting check
+        working-directory: services/${{ matrix.service }}
+        run: isort --check-only --diff src/
+
+      - name: Run flake8 linting
+        working-directory: services/${{ matrix.service }}
+        run: |
+          flake8 src/ --format=json --output-file=flake8-results.json || exit_code=$?
+          flake8 src/ || true
+          if [ ${exit_code} -ne 0 ]; then
+            echo "::error::flake8 found code quality issues"
+            exit 1
+          fi
+
+      - name: Run mypy type checking
+        working-directory: services/${{ matrix.service }}
+        run: |
+          mypy src/ --json-report mypy-results || exit_code=$?
+          mypy src/ || true
+          if [ ${exit_code} -ne 0 ]; then
+            echo "::warning::mypy found type issues"
+          fi
+
+      - name: Upload code quality results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-quality-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/flake8-results.json
+            services/${{ matrix.service }}/mypy-results/
+          retention-days: 30
+
+  # Unit and integration tests
+  test:
+    name: Test Services
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.auth-service == 'true' ||
+      needs.detect-changes.outputs.api-gateway == 'true' ||
+      needs.detect-changes.outputs.user-service == 'true' ||
+      needs.detect-changes.outputs.python-commons == 'true'
+    timeout-minutes: 25
+    strategy:
+      matrix:
+        service: [auth-service, api-gateway, user-service]
+        python-version: ['3.11', '3.12']
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ env.CACHE_VERSION }}-${{ hashFiles('services/${{ matrix.service }}/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ env.CACHE_VERSION }}-
+
+      - name: Install service dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f requirements-test.txt ]; then
+            pip install -r requirements-test.txt
+          fi
+          pip install pytest-cov pytest-xdist
+
+      - name: Run database migrations
+        working-directory: services/${{ matrix.service }}
+        if: matrix.service != 'user-service'  # Skip if alembic not configured
+        run: |
+          if [ -f alembic.ini ]; then
+            alembic upgrade head
+          fi
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+
+      - name: Run unit tests with coverage
+        working-directory: services/${{ matrix.service }}
+        run: |
+          pytest tests/ \
+            --cov=src \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:coverage_html \
+            --cov-report=term \
+            --junitxml=test-results.xml \
+            -v \
+            --tb=short \
+            -n auto
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+          TEST_MODE: true
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: services/${{ matrix.service }}/coverage.xml
+          flags: backend,${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.service }}-py${{ matrix.python-version }}
+          path: |
+            services/${{ matrix.service }}/coverage.xml
+            services/${{ matrix.service }}/coverage_html/
+            services/${{ matrix.service }}/test-results.xml
+          retention-days: 30
+
+  # Performance tests
+  performance-test:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test]
+    if: |
+      (needs.detect-changes.outputs.auth-service == 'true' ||
+       needs.detect-changes.outputs.api-gateway == 'true') &&
+      github.event_name == 'pull_request'
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install locust httpx
+
+      - name: Run performance tests
+        run: |
+          # Start services in background and run load tests
+          # This is a placeholder - adjust based on your service architecture
+          echo "Performance testing would be implemented here"
+
+  # Build Docker images
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [security-scan, code-quality, test]
+    if: |
+      needs.detect-changes.outputs.auth-service == 'true' ||
+      needs.detect-changes.outputs.api-gateway == 'true' ||
+      needs.detect-changes.outputs.user-service == 'true'
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        service: [auth-service, api-gateway, user-service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+
+  # Deploy to environments
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment:
+      name: development
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ vars.DEV_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -k infrastructure/k8s/overlays/dev/
+          kubectl rollout status deployment/auth-service -n development
+          kubectl rollout status deployment/api-gateway -n development
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: staging
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ vars.STAGING_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -k infrastructure/k8s/overlays/staging/
+          kubectl rollout status deployment/auth-service -n staging
+          kubectl rollout status deployment/api-gateway -n staging
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ vars.PROD_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes with Canary Release strategy
+        run: |
+          # Canary deployment with progressive traffic shifting
+          # Step 1: Deploy canary version with 10% traffic
+          kubectl apply -f infrastructure/k8s/canary/canary-deployment.yaml
+          kubectl wait --for=condition=ready pod -l version=canary -n production --timeout=300s
+          
+          # Step 2: Configure initial traffic split (10% canary, 90% stable)
+          kubectl apply -f - <<EOF
+          apiVersion: networking.istio.io/v1beta1
+          kind: VirtualService
+          metadata:
+            name: backend-services
+            namespace: production
+          spec:
+            http:
+            - match:
+              - uri:
+                  prefix: /
+              route:
+              - destination:
+                  host: api-gateway-service
+                  subset: stable
+                weight: 90
+              - destination:
+                  host: api-gateway-service
+                  subset: canary
+                weight: 10
+          EOF
+          
+          # Step 3: Monitor canary metrics for 5 minutes
+          echo "Monitoring canary deployment metrics..."
+          sleep 300
+          
+          # Step 4: Check canary health metrics
+          CANARY_ERROR_RATE=$(kubectl exec -n production deployment/prometheus -- \
+            promtool query instant 'rate(http_requests_total{version="canary",status=~"5.."}[5m]) / rate(http_requests_total{version="canary"}[5m])' | \
+            jq -r '.data.result[0].value[1] // "0"')
+          
+          if (( $(echo "$CANARY_ERROR_RATE > 0.05" | bc -l) )); then
+            echo "Canary error rate too high: $CANARY_ERROR_RATE"
+            kubectl delete -f infrastructure/k8s/canary/canary-deployment.yaml
+            exit 1
+          fi
+          
+          # Step 5: Progressive rollout - increase to 50%
+          kubectl patch virtualservice backend-services -n production --type merge -p \
+            '{"spec":{"http":[{"route":[{"destination":{"host":"api-gateway-service","subset":"stable"},"weight":50},{"destination":{"host":"api-gateway-service","subset":"canary"},"weight":50}]}]}}'
+          
+          sleep 300
+          
+          # Step 6: Full rollout if metrics are good
+          kubectl patch virtualservice backend-services -n production --type merge -p \
+            '{"spec":{"http":[{"route":[{"destination":{"host":"api-gateway-service","subset":"stable"},"weight":0},{"destination":{"host":"api-gateway-service","subset":"canary"},"weight":100}]}]}}'
+          
+          # Step 7: Promote canary to stable
+          kubectl set image deployment/api-gateway api-gateway=ghcr.io/${{ github.repository }}/api-gateway:${{ github.sha }} -n production
+          kubectl set image deployment/auth-service auth-service=ghcr.io/${{ github.repository }}/auth-service:${{ github.sha }} -n production
+          
+          # Step 8: Clean up canary deployment
+          kubectl delete -f infrastructure/k8s/canary/canary-deployment.yaml
+
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()

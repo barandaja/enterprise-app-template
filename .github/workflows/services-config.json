@@ -1,0 +1,75 @@
+{
+  "services": {
+    "backend": [
+      {
+        "name": "auth-service",
+        "path": "services/auth-service",
+        "port": 8001,
+        "database": "auth_db",
+        "healthcheck": "/health",
+        "dependencies": ["postgres", "redis"]
+      },
+      {
+        "name": "api-gateway", 
+        "path": "services/api-gateway",
+        "port": 8000,
+        "database": "gateway_db",
+        "healthcheck": "/health",
+        "dependencies": ["auth-service", "user-service"]
+      },
+      {
+        "name": "user-service",
+        "path": "services/user-service", 
+        "port": 8002,
+        "database": "user_db",
+        "healthcheck": "/health",
+        "dependencies": ["postgres", "redis"]
+      }
+    ],
+    "frontend": [
+      {
+        "name": "frontend",
+        "path": "frontend",
+        "port": 5173,
+        "buildOutput": "dist",
+        "dependencies": ["api-gateway"]
+      }
+    ],
+    "infrastructure": {
+      "databases": ["postgres"],
+      "caches": ["redis"],
+      "messageBrokers": [],
+      "monitoring": ["prometheus", "grafana"],
+      "tracing": ["jaeger"]
+    }
+  },
+  "environments": {
+    "development": {
+      "apiUrl": "http://localhost:8000",
+      "frontendUrl": "http://localhost:5173"
+    },
+    "staging": {
+      "apiUrl": "https://staging-api.example.com",
+      "frontendUrl": "https://staging.example.com",
+      "cluster": "staging-cluster"
+    },
+    "production": {
+      "apiUrl": "https://api.example.com",
+      "frontendUrl": "https://app.example.com",
+      "cluster": "prod-cluster"
+    }
+  },
+  "deployment": {
+    "canary": {
+      "initialTrafficPercentage": 10,
+      "steps": [10, 25, 50, 100],
+      "monitoringDuration": 300,
+      "errorThreshold": 0.05,
+      "latencyThreshold": 500
+    },
+    "rollback": {
+      "automaticOnError": true,
+      "keepLastVersions": 3
+    }
+  }
+}
