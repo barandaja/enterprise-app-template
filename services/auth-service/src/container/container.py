@@ -18,7 +18,9 @@ from ..services.auth.email_verification_service import EmailVerificationService
 from ..services.session_service import SessionService
 from ..repositories.user_repository import UserRepository
 from ..events.event_bus import InMemoryEventBus
+from ..events.event_bus_factory import EventBusFactory
 from ..events.audit_handlers import AuditEventHandler
+from ..core.config import settings
 
 logger = structlog.get_logger()
 
@@ -192,8 +194,11 @@ class Container:
             # Register encryption service as singleton
             self.register_singleton(IEncryptionService, FernetEncryptionService)
             
-            # Register event bus as singleton
-            event_bus = InMemoryEventBus()
+            # Register event bus as singleton using factory
+            event_bus = await EventBusFactory.create_event_bus(
+                service_name=settings.SERVICE_NAME,
+                service_role=settings.SERVICE_ROLE
+            )
             self.register_instance(IEventBus, event_bus)
             
             # Register audit event handler

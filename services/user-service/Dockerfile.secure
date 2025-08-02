@@ -1,0 +1,111 @@
+# Security-hardened Dockerfile for User Service
+# Multi-stage build for minimal attack surface
+
+# Build stage
+FROM python:3.11-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Production stage
+FROM python:3.11-slim-bookworm AS production
+
+# Security: Create non-root user
+ARG USER_ID=1001
+ARG GROUP_ID=1001
+RUN groupadd -g ${GROUP_ID} appuser && \
+    useradd -r -u ${USER_ID} -g appuser -s /bin/false appuser
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Set working directory
+WORKDIR /app
+
+# Copy application code
+COPY --chown=appuser:appuser . /app/
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/tmp && \
+    chown -R appuser:appuser /app/logs /app/tmp
+
+# Security: Set proper permissions
+RUN chmod -R 755 /app && \
+    chmod -R 700 /app/logs
+
+# Security: Remove unnecessary files
+RUN find /app -name "*.pyc" -delete && \
+    find /app -name "__pycache__" -type d -exec rm -rf {} + || true
+
+# Switch to non-root user
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port (non-privileged)
+EXPOSE 8000
+
+# Security: Set Python flags
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Run the application
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--loop", "uvloop", "--no-access-log"]
+
+# Development stage
+FROM production AS development
+
+# Switch back to root for development tools
+USER root
+
+# Install development dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install development Python packages
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-cov \
+    pytest-asyncio \
+    black \
+    flake8 \
+    mypy \
+    ipython
+
+# Create directories for development
+RUN mkdir -p /app/.pytest_cache /app/.mypy_cache && \
+    chown -R appuser:appuser /app/.pytest_cache /app/.mypy_cache
+
+# Switch back to non-root user
+USER appuser
+
+# Development command with auto-reload
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--loop", "uvloop"]

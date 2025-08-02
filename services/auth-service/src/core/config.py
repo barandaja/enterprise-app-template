@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     DEBUG: bool = Field(default=False, env="DEBUG")
     ENVIRONMENT: str = Field(default="production", env="ENVIRONMENT")
     
+    # Service identification for event bus
+    SERVICE_NAME: str = Field(default="auth-service", env="SERVICE_NAME")
+    SERVICE_ROLE: str = Field(default="auth", env="SERVICE_ROLE")
+    
     # API settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Enterprise Auth Service"
