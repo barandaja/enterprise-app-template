@@ -13,6 +13,9 @@ import AuthLayout from './layouts/AuthLayout';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import EmailVerification from './pages/EmailVerification';
 import Profile from './pages/Profile';
 import ProfileEdit from './pages/ProfileEdit';
 import PrivacySettings from './pages/PrivacySettings';
@@ -89,15 +92,45 @@ function App() {
         />
 
         <Routes>
-          {/* Public routes with AuthLayout */}
+          {/* Authentication routes with AuthLayout */}
           <Route path="/login" element={
-            <AuthLayout>
+            <AuthLayout 
+              title="Welcome back" 
+              subtitle="Sign in to your account to continue"
+            >
               <Login />
             </AuthLayout>
           } />
           <Route path="/register" element={
-            <AuthLayout>
+            <AuthLayout 
+              title="Create account" 
+              subtitle="Get started with your free account"
+            >
               <Register />
+            </AuthLayout>
+          } />
+          <Route path="/forgot-password" element={
+            <AuthLayout 
+              title="Reset password" 
+              subtitle="We'll help you get back into your account"
+            >
+              <ForgotPassword />
+            </AuthLayout>
+          } />
+          <Route path="/reset-password" element={
+            <AuthLayout 
+              title="Set new password" 
+              subtitle="Choose a strong password for your account"
+            >
+              <ResetPassword />
+            </AuthLayout>
+          } />
+          <Route path="/verify-email" element={
+            <AuthLayout 
+              title="Verify your email" 
+              subtitle="Complete your account setup"
+            >
+              <EmailVerification />
             </AuthLayout>
           } />
 

@@ -508,6 +508,104 @@ export class AuthService {
     );
   }
 
+  // ===========================================================================
+  // Convenience Methods for Frontend Pages
+  // ===========================================================================
+
+  /**
+   * Convenience method for forgot password (alias for requestPasswordReset)
+   * 
+   * @param email - User email address
+   * @param config - Additional request configuration 
+   * @returns Promise resolving to reset confirmation
+   */
+  async forgotPassword(
+    email: string,
+    config: ApiRequestConfig = {}
+  ): Promise<ApiResponse<void>> {
+    return this.requestPasswordReset({ email }, config);
+  }
+
+  /**
+   * Convenience method for reset password (alias for confirmPasswordReset)
+   * 
+   * @param params - Reset password parameters
+   * @param config - Additional request configuration
+   * @returns Promise resolving to reset confirmation
+   */
+  async resetPassword(
+    params: { token: string; email: string; password: string },
+    config: ApiRequestConfig = {}
+  ): Promise<ApiResponse<void>> {
+    return this.confirmPasswordReset({
+      token: params.token,
+      password: params.password,
+      confirmPassword: params.password, // Assume frontend already validated
+    }, config);
+  }
+
+  /**
+   * Validate password reset token
+   * 
+   * @param token - Reset token from email
+   * @param email - User email address
+   * @param config - Additional request configuration
+   * @returns Promise resolving to token validation result
+   */
+  async validateResetToken(
+    token: string,
+    email: string,
+    config: ApiRequestConfig = {}
+  ): Promise<ApiResponse<{ valid: boolean; expiresAt?: string }>> {
+    return this.client.post<{ token: string; email: string }, { valid: boolean; expiresAt?: string }>(
+      `${this.baseUrl}/password/reset/validate`,
+      { token, email },
+      {
+        ...config,
+        skipAuth: true,
+        cancelKey: 'auth.validateResetToken',
+      }
+    );
+  }
+
+  /**
+   * Verify email with token (alias for confirmEmailVerification)
+   * 
+   * @param token - Verification token from email
+   * @param email - User email address (optional)
+   * @param config - Additional request configuration
+   * @returns Promise resolving to verification result
+   */
+  async verifyEmail(
+    token: string,
+    email?: string | null,
+    config: ApiRequestConfig = {}
+  ): Promise<ApiResponse<{ email?: string; alreadyVerified?: boolean }>> {
+    return this.client.post<EmailVerificationConfirm, { email?: string; alreadyVerified?: boolean }>(
+      `${this.baseUrl}/email/verify/confirm`,
+      { token, email: email || undefined },
+      {
+        ...config,
+        skipAuth: true,
+        cancelKey: 'auth.verifyEmail',
+      }
+    );
+  }
+
+  /**
+   * Resend email verification
+   * 
+   * @param email - User email address
+   * @param config - Additional request configuration
+   * @returns Promise resolving to resend confirmation
+   */
+  async resendEmailVerification(
+    email: string,
+    config: ApiRequestConfig = {}
+  ): Promise<ApiResponse<void>> {
+    return this.requestEmailVerification({ email }, config);
+  }
+
   /**
    * Confirm email verification
    * 

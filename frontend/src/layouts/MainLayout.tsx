@@ -1,244 +1,153 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { 
-  Home, 
-  User, 
-  Settings, 
-  Menu, 
-  X, 
-  Sun, 
-  Moon, 
-  LogOut,
-  Bell
-} from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { useAuthUser, useIsAuthenticated } from '../stores/authStore';
+import { useSidebar, useViewport } from '../stores/uiStore';
 import { cn } from '../utils';
-import { NavItem, PageProps } from '../types';
+import { Header } from '../components/Header';
+import { Sidebar } from '../components/Sidebar';
+import { Breadcrumbs } from '../components/Breadcrumbs';
+import type { PageProps, BreadcrumbItem } from '../types';
 
 interface MainLayoutProps extends PageProps {
   children: React.ReactNode;
+  breadcrumbs?: BreadcrumbItem[];
+  showBreadcrumbs?: boolean;
+  fullWidth?: boolean;
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'full';
+  padding?: 'none' | 'sm' | 'md' | 'lg';
 }
 
-const navigationItems: NavItem[] = [
-  {
-    label: 'Dashboard',
-    href: '/',
-    icon: Home,
-  },
-  {
-    label: 'Profile',
-    href: '/profile',
-    icon: User,
-  },
-];
-
-export function MainLayout({ children, className }: MainLayoutProps) {
+export function MainLayout({ 
+  children, 
+  className, 
+  breadcrumbs, 
+  showBreadcrumbs = true,
+  fullWidth = false,
+  maxWidth = 'full',
+  padding = 'md'
+}: MainLayoutProps) {
   const location = useLocation();
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
-  const [isDarkMode, setIsDarkMode] = React.useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('theme') === 'dark' ||
-        (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    }
-    return false;
-  });
-
-  // Toggle dark mode
-  const toggleDarkMode = () => {
-    const newMode = !isDarkMode;
-    setIsDarkMode(newMode);
+  const user = useAuthUser();
+  const isAuthenticated = useIsAuthenticated();
+  const sidebar = useSidebar();
+  const viewport = useViewport();
+  
+  // Get container and padding classes
+  const getContainerClasses = () => {
+    if (fullWidth) return 'w-full';
     
-    if (newMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
+    const maxWidthClasses = {
+      sm: 'max-w-screen-sm',
+      md: 'max-w-screen-md', 
+      lg: 'max-w-screen-lg',
+      xl: 'max-w-screen-xl',
+      '2xl': 'max-w-screen-2xl',
+      full: 'max-w-none'
+    };
+    
+    return cn('w-full mx-auto', maxWidthClasses[maxWidth]);
+  };
+  
+  const getPaddingClasses = () => {
+    const paddingClasses = {
+      none: '',
+      sm: 'p-4',
+      md: 'p-6',
+      lg: 'p-8'
+    };
+    
+    return paddingClasses[padding];
   };
 
-  // Apply theme on mount
-  React.useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, []);
-
-  // Close mobile menu on route change
-  React.useEffect(() => {
-    setIsMobileMenuOpen(false);
-  }, [location.pathname]);
-
-  const isActive = (href: string) => {
-    if (href === '/') {
-      return location.pathname === '/';
-    }
-    return location.pathname.startsWith(href);
-  };
+  // Don't render sidebar and header for unauthenticated users
+  if (!isAuthenticated || !user) {
+    return (
+      <div className="min-h-screen bg-background">
+        <main className={cn('flex-1', className)}>
+          {children}
+        </main>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container flex h-16 items-center justify-between">
-          {/* Logo */}
-          <Link 
-            to="/" 
-            className="flex items-center space-x-2 font-bold text-xl text-foreground hover:text-primary transition-colors"
-          >
-            <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground font-bold">
-              E
+    <div className="min-h-screen bg-background flex">
+      {/* Sidebar */}
+      <Sidebar />
+      
+      {/* Main Content Area */}
+      <div className={cn(
+        'flex-1 flex flex-col min-w-0 transition-all duration-300',
+        sidebar.isCollapsed ? 'lg:ml-16' : 'lg:ml-80'
+      )}>
+        {/* Header */}
+        <Header />
+        
+        {/* Breadcrumbs */}
+        {showBreadcrumbs && (
+          <div className="border-b bg-muted/30 transition-all duration-300">
+            <div className={cn(
+              getContainerClasses(),
+              'px-6 py-3'
+            )}>
+              <Breadcrumbs items={breadcrumbs} />
             </div>
-            <span>Enterprise App</span>
-          </Link>
-
-          {/* Desktop Navigation */}
-          <nav className="hidden md:flex items-center space-x-1">
-            {navigationItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href}
-                  className={cn(
-                    'nav-link',
-                    isActive(item.href) && 'nav-link-active'
-                  )}
-                >
-                  {Icon && <Icon className="h-4 w-4" />}
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          {/* Right side actions */}
-          <div className="flex items-center space-x-2">
-            {/* Notifications */}
-            <button
-              className="btn-ghost btn-icon hidden sm:flex"
-              aria-label="Notifications"
-            >
-              <Bell className="h-4 w-4" />
-            </button>
-
-            {/* Theme toggle */}
-            <button
-              onClick={toggleDarkMode}
-              className="btn-ghost btn-icon"
-              aria-label="Toggle theme"
-            >
-              {isDarkMode ? (
-                <Sun className="h-4 w-4" />
-              ) : (
-                <Moon className="h-4 w-4" />
-              )}
-            </button>
-
-            {/* User menu - placeholder */}
-            <div className="hidden sm:flex items-center space-x-2">
-              <Link to="/profile" className="btn-ghost">
-                <User className="h-4 w-4" />
-                <span className="hidden lg:inline">Profile</span>
-              </Link>
-              <button className="btn-ghost text-destructive hover:bg-destructive/10">
-                <LogOut className="h-4 w-4" />
-                <span className="hidden lg:inline">Logout</span>
-              </button>
-            </div>
-
-            {/* Mobile menu button */}
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="btn-ghost btn-icon md:hidden"
-              aria-label="Toggle menu"
-            >
-              {isMobileMenuOpen ? (
-                <X className="h-4 w-4" />
-              ) : (
-                <Menu className="h-4 w-4" />
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Mobile Navigation */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden border-t bg-background">
-            <nav className="container py-4 space-y-2">
-              {navigationItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.href}
-                    to={item.href}
-                    className={cn(
-                      'flex items-center space-x-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground',
-                      isActive(item.href) && 'bg-accent text-accent-foreground'
-                    )}
-                  >
-                    {Icon && <Icon className="h-4 w-4" />}
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-              
-              {/* Mobile-only items */}
-              <div className="pt-2 border-t space-y-2">
-                <button className="flex items-center space-x-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground w-full text-left">
-                  <Bell className="h-4 w-4" />
-                  <span>Notifications</span>
-                </button>
-                <Link
-                  to="/profile"
-                  className="flex items-center space-x-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-                >
-                  <User className="h-4 w-4" />
-                  <span>Profile</span>
-                </Link>
-                <button className="flex items-center space-x-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-destructive/10 text-destructive w-full text-left">
-                  <LogOut className="h-4 w-4" />
-                  <span>Logout</span>
-                </button>
-              </div>
-            </nav>
           </div>
         )}
-      </header>
-
-      {/* Main Content */}
-      <main className={cn('flex-1', className)}>
-        {children}
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t bg-muted/50">
-        <div className="container py-8">
-          <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-            <div className="flex items-center space-x-2">
-              <div className="h-6 w-6 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
-                E
+        
+        {/* Page Content */}
+        <main className={cn(
+          'flex-1 transition-all duration-300',
+          getContainerClasses(),
+          getPaddingClasses(),
+          className
+        )}>
+          {/* Scroll to top on route change */}
+          <div className="min-h-0">
+            {children}
+          </div>
+        </main>
+        
+        {/* Footer */}
+        <footer className="border-t bg-muted/50 mt-auto">
+          <div className={cn(
+            getContainerClasses(),
+            'px-6 py-8'
+          )}>
+            <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+              <div className="flex items-center space-x-2">
+                <div className="h-6 w-6 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
+                  E
+                </div>
+                <span className="text-sm text-muted-foreground">
+                  © 2024 Enterprise App. All rights reserved.
+                </span>
               </div>
-              <span className="text-sm text-muted-foreground">
-                © 2024 Enterprise App. All rights reserved.
-              </span>
-            </div>
-            
-            <div className="flex items-center space-x-6 text-sm text-muted-foreground">
-              <Link to="/privacy" className="hover:text-foreground transition-colors">
-                Privacy Policy
-              </Link>
-              <Link to="/terms" className="hover:text-foreground transition-colors">
-                Terms of Service
-              </Link>
-              <Link to="/support" className="hover:text-foreground transition-colors">
-                Support
-              </Link>
+              
+              <div className="flex items-center space-x-6 text-sm text-muted-foreground">
+                <a href="/privacy" className="hover:text-foreground transition-colors focus:outline-none focus:ring-2 focus:ring-primary/20 rounded px-1">
+                  Privacy Policy
+                </a>
+                <a href="/terms" className="hover:text-foreground transition-colors focus:outline-none focus:ring-2 focus:ring-primary/20 rounded px-1">
+                  Terms of Service
+                </a>
+                <a href="/support" className="hover:text-foreground transition-colors focus:outline-none focus:ring-2 focus:ring-primary/20 rounded px-1">
+                  Support
+                </a>
+              </div>
             </div>
           </div>
-        </div>
-      </footer>
+        </footer>
+      </div>
+      
+      {/* Mobile Overlay */}
+      {!sidebar.isCollapsed && viewport.isMobile && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          onClick={() => {/* Will be handled by sidebar component */}}
+          aria-hidden="true"
+        />
+      )}
     </div>
   );
 }
