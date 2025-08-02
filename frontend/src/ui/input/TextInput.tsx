@@ -104,12 +104,23 @@ export const TextInput = React.forwardRef<HTMLInputElement, TextInputProps>(
       return result;
     };
 
+    // Sanitize suggestion to prevent XSS
+    const sanitizeSuggestion = (text: string): string => {
+      // Remove any HTML tags and encode special characters
+      return String(text)
+        .replace(/[<>]/g, '') // Remove angle brackets
+        .replace(/javascript:/gi, '') // Remove javascript: protocol
+        .replace(/on\w+\s*=/gi, ''); // Remove event handlers
+    };
+
     // Filter suggestions based on input value
     React.useEffect(() => {
       if (suggestions.length > 0 && typeof value === 'string' && value.length > 0) {
-        const filtered = suggestions.filter(suggestion =>
-          suggestion.toLowerCase().includes(value.toLowerCase())
-        );
+        const filtered = suggestions
+          .map(sanitizeSuggestion) // Sanitize all suggestions
+          .filter(suggestion =>
+            suggestion.toLowerCase().includes(value.toLowerCase())
+          );
         setFilteredSuggestions(filtered);
         setShowSuggestions(isFocused && filtered.length > 0);
       } else {
@@ -246,7 +257,7 @@ export const TextInput = React.forwardRef<HTMLInputElement, TextInputProps>(
           >
             {filteredSuggestions.map((suggestion, index) => (
               <li
-                key={suggestion}
+                key={index}
                 className={cn(
                   'px-3 py-2 cursor-pointer text-sm',
                   index === selectedSuggestionIndex
@@ -256,8 +267,10 @@ export const TextInput = React.forwardRef<HTMLInputElement, TextInputProps>(
                 onClick={() => handleSuggestionSelect(suggestion)}
                 role="option"
                 aria-selected={index === selectedSuggestionIndex}
+                dangerouslySetInnerHTML={undefined} // Explicitly prevent dangerous HTML
               >
-                {suggestion}
+                {/* Safely render text content only */}
+                {String(suggestion)}
               </li>
             ))}
           </ul>

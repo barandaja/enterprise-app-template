@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast';
 import { useAuthStore } from './stores/authStore';
 import { ErrorBoundary, RouteAsyncBoundary, ConsentBanner, AgeVerification } from './components';
 import { initializeSecurityMonitoring } from './security/headers';
+import { initializeCSP } from './security/csp';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -43,6 +44,7 @@ function App() {
   useEffect(() => {
     useAuthStore.getState().initialize();
     initializeSecurityMonitoring();
+    initializeCSP();
   }, []);
 
   const handleAgeVerified = (age: number, birthDate: Date) => {

@@ -31,13 +31,12 @@ import type {
   RetryConfig,
   RequestController,
   CancellationRegistry,
-  DEFAULT_API_CONFIG,
-  DEFAULT_RETRY_CONFIG,
   MiddlewareFunction,
   MiddlewareContext,
   CacheConfig,
   PerformanceConfig,
 } from './types';
+import { DEFAULT_API_CONFIG, DEFAULT_RETRY_CONFIG } from './config';
 import { cacheService, type CacheService } from './cache.service';
 import { useAuthStore } from '../../stores/authStore';
 import { addCSRFToken } from '../../security/csrf';

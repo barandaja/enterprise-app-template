@@ -44,20 +44,15 @@ class CSRFTokenManager {
       return;
     }
 
-    // In development only - generate new token
-    // In production, server should always provide token
-    if (process.env.NODE_ENV === 'development') {
-      this.token = this.generateToken();
-      this.storeToken();
-    }
+    // SECURITY: Never generate CSRF tokens client-side
+    // Token must always come from the server
+    console.warn('CSRF token not found. Server must provide CSRF token via cookie or meta tag.');
   }
 
   /**
-   * Generate a new CSRF token
+   * @deprecated Client-side token generation removed for security
+   * CSRF tokens must be generated server-side only
    */
-  private generateToken(): string {
-    return securityUtils.generateSecureRandom(32);
-  }
 
   /**
    * Get token from cookie (set by server)
@@ -82,34 +77,18 @@ class CSRFTokenManager {
   }
 
   /**
-   * Store token in session storage for synchronizer pattern
-   * Only used in development - production tokens come from server
+   * @deprecated Token storage removed for security
+   * CSRF tokens must be managed server-side only
    */
-  private storeToken(): void {
-    if (this.token && process.env.NODE_ENV === 'development') {
-      // Store in sessionStorage for same-tab access (dev only)
-      sessionStorage.setItem(this.storageKey, this.token);
-      
-      // Set cookie in development
-      this.setTokenCookie(this.token);
-    }
-  }
 
   /**
    * Set CSRF token as cookie (double-submit pattern)
    * In production, this should be httpOnly and set by server
    */
-  private setTokenCookie(token: string): void {
-    // In development, we can't set httpOnly from JavaScript
-    // This is for demonstration - in production, server sets httpOnly cookie
-    const isSecure = window.location.protocol === 'https:';
-    const sameSite = 'Strict';
-    
-    document.cookie = `${this.cookieName}=${token}; ` +
-      `SameSite=${sameSite}; ` +
-      `Path=/; ` +
-      (isSecure ? 'Secure; ' : '');
-  }
+  /**
+   * @deprecated Client-side cookie setting removed for security
+   * CSRF cookies must be httpOnly and set by server only
+   */
 
   /**
    * Get current CSRF token
@@ -122,18 +101,16 @@ class CSRFTokenManager {
       return cookieToken;
     }
 
-    // Fallback to stored token
-    if (!this.token) {
-      // In development, we might have a token in sessionStorage
-      if (process.env.NODE_ENV === 'development') {
-        this.token = sessionStorage.getItem(this.storageKey) || this.generateToken();
-        this.storeToken();
-      } else {
-        // In production, server should always provide token
-        throw new CSRFError('CSRF token not found. Server must set csrf_token cookie.');
-      }
+    // Try meta tag as fallback
+    const metaToken = this.getTokenFromMeta();
+    if (metaToken) {
+      this.token = metaToken;
+      return metaToken;
     }
-    return this.token;
+
+    // SECURITY: Never generate tokens client-side
+    // Server must always provide CSRF token
+    throw new CSRFError('CSRF token not found. Server must provide token via cookie or meta tag.');
   }
 
   /**
@@ -156,8 +133,9 @@ class CSRFTokenManager {
    * Refresh CSRF token
    */
   refreshToken(): void {
-    this.token = this.generateToken();
-    this.storeToken();
+    // SECURITY: Token refresh must be done server-side
+    // Client should request new token from server
+    throw new CSRFError('CSRF token refresh must be performed by the server. Request a new token from /api/csrf/refresh');
   }
 
   /**
@@ -172,13 +150,8 @@ class CSRFTokenManager {
    */
   clearToken(): void {
     this.token = null;
-    sessionStorage.removeItem(this.storageKey);
-    
-    // Clear cookie
-    document.cookie = `${this.cookieName}=; ` +
-      'expires=Thu, 01 Jan 1970 00:00:00 UTC; ' +
-      'Path=/; ' +
-      'SameSite=Strict';
+    // Note: httpOnly cookies cannot be cleared from JavaScript
+    // Server should clear the CSRF cookie on logout
   }
 }
 
