@@ -1,0 +1,451 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Auth Service Security Dashboard",
+    "tags": ["auth-service", "security", "monitoring"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Security Events",
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "changes(auth_service_security_events_total[1h])",
+          "iconColor": "red",
+          "textColumn": "event_type"
+        }
+      ]
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "instance",
+          "type": "query",
+          "query": "label_values(up{job=\"auth-service\"}, instance)",
+          "refresh": 1,
+          "includeAll": true,
+          "allValue": ".*",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Authentication Failure Rate",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "(sum(rate(auth_service_auth_failures_total{instance=~\"$instance\"}[5m])) / sum(rate(auth_service_auth_attempts_total{instance=~\"$instance\"}[5m]))) * 100",
+            "legendFormat": "Failure Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 10},
+                {"color": "red", "value": 25}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Encryption Errors",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(auth_service_encryption_errors_total{instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Errors/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "red", "value": 0.0001}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Email Hash Collisions",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(auth_service_email_hash_collisions_total{instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Collisions/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "red", "value": 0.0001}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Rate Limit Violations",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(auth_service_rate_limit_violations_total{instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Violations/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 1},
+                {"color": "red", "value": 10}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Failed Login Attempts by IP",
+        "type": "table",
+        "gridPos": {"h": 10, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "topk(20, sum by (client_ip) (increase(auth_service_auth_failures_total{instance=~\"$instance\"}[1h])))",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true
+              },
+              "renameByName": {
+                "client_ip": "Client IP",
+                "Value": "Failed Attempts (1h)"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Failed Attempts (1h)"},
+              "properties": [
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "steps": [
+                      {"color": "green", "value": 0},
+                      {"color": "yellow", "value": 10},
+                      {"color": "red", "value": 50}
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 6,
+        "title": "Authentication Events Timeline",
+        "type": "timeseries",
+        "gridPos": {"h": 10, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(auth_service_auth_attempts_total{instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Total Auth Attempts/sec"
+          },
+          {
+            "expr": "sum(rate(auth_service_auth_failures_total{instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Auth Failures/sec"
+          },
+          {
+            "expr": "sum(rate(auth_service_auth_successes_total{instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Auth Successes/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Password Security Violations",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+        "targets": [
+          {
+            "expr": "rate(auth_service_weak_password_attempts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Weak Password Attempts/sec"
+          },
+          {
+            "expr": "rate(auth_service_password_reuse_attempts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Password Reuse Attempts/sec"
+          },
+          {
+            "expr": "rate(auth_service_brute_force_detected_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Brute Force Detected/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Suspicious Activity Indicators",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+        "targets": [
+          {
+            "expr": "rate(auth_service_suspicious_login_patterns_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Suspicious Login Patterns/sec"
+          },
+          {
+            "expr": "rate(auth_service_new_location_logins_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - New Location Logins/sec"
+          },
+          {
+            "expr": "rate(auth_service_multiple_failed_attempts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Multiple Failed Attempts/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Token Security Events",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+        "targets": [
+          {
+            "expr": "rate(auth_service_token_validation_failures_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Token Validation Failures/sec"
+          },
+          {
+            "expr": "rate(auth_service_token_tampering_detected_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Token Tampering Detected/sec"
+          },
+          {
+            "expr": "rate(auth_service_expired_token_usage_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Expired Token Usage/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Geographic Distribution of Failed Logins",
+        "type": "geomap",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
+        "targets": [
+          {
+            "expr": "sum by (country) (increase(auth_service_auth_failures_total{instance=~\"$instance\"}[1h]))",
+            "legendFormat": "{{country}}"
+          }
+        ],
+        "options": {
+          "view": {
+            "id": "zero",
+            "lat": 0,
+            "lon": 0,
+            "zoom": 1
+          },
+          "controls": {
+            "showZoom": true,
+            "showAttribution": true
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Account Security Status",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
+        "targets": [
+          {
+            "expr": "auth_service_locked_accounts_total{instance=~\"$instance\"}",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Locked Accounts"
+          },
+          {
+            "expr": "auth_service_accounts_with_weak_passwords_total{instance=~\"$instance\"}",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Weak Passwords"
+          },
+          {
+            "expr": "auth_service_accounts_password_expired_total{instance=~\"$instance\"}",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Expired Passwords"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "seriesToColumns",
+            "options": {
+              "byField": "instance"
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true
+              },
+              "renameByName": {
+                "instance": "Instance"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "SSL/TLS Certificate Status",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
+        "targets": [
+          {
+            "expr": "auth_service_ssl_cert_expiry_days{instance=~\"$instance\"}",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "__name__": true,
+                "job": true
+              },
+              "renameByName": {
+                "instance": "Instance",
+                "Value": "Days Until Expiry"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Days Until Expiry"},
+              "properties": [
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "steps": [
+                      {"color": "red", "value": 0},
+                      {"color": "yellow", "value": 7},
+                      {"color": "orange", "value": 30},
+                      {"color": "green", "value": 90}
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 13,
+        "title": "Compliance Violations",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 42},
+        "targets": [
+          {
+            "expr": "rate(auth_service_audit_log_failures_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Audit Log Failures/sec"
+          },
+          {
+            "expr": "rate(auth_service_data_retention_violations_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Data Retention Violations/sec"
+          },
+          {
+            "expr": "rate(auth_service_gdpr_violations_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - GDPR Violations/sec"
+          },
+          {
+            "expr": "rate(auth_service_hipaa_violations_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - HIPAA Violations/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "red", "value": 0.0001}
+              ]
+            }
+          }
+        },
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [0], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "1m", "now"]},
+              "reducer": {"params": [], "type": "last"},
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "frequency": "10s",
+          "handler": 1,
+          "name": "Compliance Violations Detected",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      }
+    ]
+  }
+}

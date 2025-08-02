@@ -1,0 +1,90 @@
+{{ define "email.html" }}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .header { background-color: #f4f4f4; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+        .alert { border-left: 4px solid #007cba; padding: 15px; margin: 10px 0; background-color: #f9f9f9; }
+        .alert.critical { border-left-color: #d32f2f; background-color: #ffebee; }
+        .alert.warning { border-left-color: #f57c00; background-color: #fff8e1; }
+        .alert.resolved { border-left-color: #388e3c; background-color: #e8f5e8; }
+        .labels { background-color: #e3f2fd; padding: 10px; border-radius: 3px; margin: 10px 0; }
+        .label { display: inline-block; background-color: #1976d2; color: white; padding: 3px 8px; border-radius: 3px; margin: 2px; font-size: 12px; }
+        .runbook { background-color: #4caf50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 3px; display: inline-block; margin: 10px 0; }
+        .dashboard { background-color: #ff9800; color: white; padding: 8px 16px; text-decoration: none; border-radius: 3px; display: inline-block; margin: 10px 0; }
+        .timestamp { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🔔 Auth Service Alert Notification</h2>
+        <p class="timestamp">{{ .Alerts | len }} alert(s) - Generated at {{ now | date "2006-01-02 15:04:05" }}</p>
+    </div>
+
+    {{ range .Alerts }}
+    <div class="alert {{ .Labels.severity }}{{ if eq .Status "resolved" }} resolved{{ end }}">
+        <h3>{{ if eq .Status "resolved" }}✅ RESOLVED: {{ else }}{{ if eq .Labels.severity "critical" }}🚨 CRITICAL: {{ else if eq .Labels.severity "warning" }}⚠️ WARNING: {{ else }}ℹ️ INFO: {{ end }}{{ end }}{{ .Annotations.summary }}</h3>
+        
+        <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+        
+        <div class="labels">
+            <strong>Labels:</strong><br>
+            {{ range .Labels.SortedPairs }}
+            <span class="label">{{ .Name }}: {{ .Value }}</span>
+            {{ end }}
+        </div>
+
+        {{ if .Annotations.runbook_url }}
+        <a href="{{ .Annotations.runbook_url }}" class="runbook">📖 View Runbook</a>
+        {{ end }}
+        
+        {{ if .Labels.service }}
+        <a href="${GRAFANA_BASE_URL}/d/{{ .Labels.service }}/{{ .Labels.service }}-overview" class="dashboard">📊 View Dashboard</a>
+        {{ end }}
+
+        <p class="timestamp">
+            {{ if eq .Status "resolved" }}
+            Resolved at: {{ .EndsAt | date "2006-01-02 15:04:05" }}
+            {{ else }}
+            Started at: {{ .StartsAt | date "2006-01-02 15:04:05" }}
+            {{ end }}
+        </p>
+    </div>
+    {{ end }}
+
+    <div class="header">
+        <p><strong>Quick Actions:</strong></p>
+        <ul>
+            <li><a href="${GRAFANA_BASE_URL}/d/auth-service/auth-service-overview">📊 Auth Service Dashboard</a></li>
+            <li><a href="${PROMETHEUS_BASE_URL}/alerts">🔥 Active Alerts in Prometheus</a></li>
+            <li><a href="${ALERTMANAGER_BASE_URL}/#/alerts">📢 AlertManager Console</a></li>
+            <li><a href="https://your-docs.com/runbooks">📚 All Runbooks</a></li>
+        </ul>
+    </div>
+</body>
+</html>
+{{ end }}
+
+{{ define "email.subject" }}
+[{{ .Status | title }}] {{ .GroupLabels.service | title }}: {{ .GroupLabels.alertname }}
+{{ end }}
+
+{{ define "slack.title" }}
+{{ if eq .Status "resolved" }}✅ RESOLVED{{ else }}{{ if eq .CommonLabels.severity "critical" }}🚨 CRITICAL{{ else if eq .CommonLabels.severity "warning" }}⚠️ WARNING{{ else }}ℹ️ INFO{{ end }}{{ end }}: {{ .GroupLabels.service | title }} Alert
+{{ end }}
+
+{{ define "slack.text" }}
+{{ range .Alerts }}
+*{{ .Annotations.summary }}*
+{{ .Annotations.description }}
+
+*Service:* {{ .Labels.service }}
+*Category:* {{ .Labels.category }}
+*Severity:* {{ .Labels.severity }}
+{{ if .Annotations.runbook_url }}*Runbook:* {{ .Annotations.runbook_url }}{{ end }}
+
+{{ if eq .Status "resolved" }}✅ *Status:* Resolved at {{ .EndsAt | date "15:04:05" }}{{ else }}🔥 *Status:* Active since {{ .StartsAt | date "15:04:05" }}{{ end }}
+{{ end }}
+{{ end }}

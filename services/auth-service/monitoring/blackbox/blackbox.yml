@@ -1,0 +1,204 @@
+modules:
+  # HTTP 2xx check
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200, 201, 202, 204]
+      method: GET
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter"
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      ip_protocol_fallback: false
+      fail_if_ssl: false
+      fail_if_not_ssl: false
+      fail_if_body_matches_regexp: []
+      fail_if_body_not_matches_regexp: []
+      fail_if_header_matches: []
+      fail_if_header_not_matches: []
+      tls_config:
+        insecure_skip_verify: false
+        ca_file: ""
+        cert_file: ""
+        key_file: ""
+        server_name: ""
+      basic_auth:
+        username: ""
+        password: ""
+
+  # HTTP POST check (for auth endpoints)
+  http_post_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200, 201, 401]  # 401 is expected for unauthenticated requests
+      method: POST
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter"
+        Content-Type: "application/json"
+      body: '{"test": "probe"}'
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+
+  # HTTPS check with SSL verification
+  https_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200, 201, 202, 204]
+      method: GET
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter"
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      fail_if_not_ssl: true
+      tls_config:
+        insecure_skip_verify: false
+
+  # SSL Certificate check
+  ssl_cert_check:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      method: GET
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter"
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      fail_if_not_ssl: true
+      tls_config:
+        insecure_skip_verify: false
+
+  # TCP connection check
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: "ip4"
+      ip_protocol_fallback: false
+      source_ip_address: ""
+      query_response: []
+      tls: false
+      tls_config:
+        insecure_skip_verify: false
+
+  # TCP with TLS check
+  tcp_tls_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: "ip4"
+      tls: true
+      tls_config:
+        insecure_skip_verify: false
+
+  # ICMP ping check
+  icmp:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      preferred_ip_protocol: "ip4"
+      source_ip_address: ""
+      dont_fragment: false
+
+  # DNS check
+  dns_a:
+    prober: dns
+    timeout: 5s
+    dns:
+      preferred_ip_protocol: "ip4"
+      query_name: "auth-service.example.com"
+      query_type: "A"
+      valid_rcodes:
+        - NOERROR
+      validate_answer_rrs:
+        fail_if_matches_regexp: []
+        fail_if_not_matches_regexp: []
+      validate_authority_rrs:
+        fail_if_matches_regexp: []
+        fail_if_not_matches_regexp: []
+      validate_additional_rrs:
+        fail_if_matches_regexp: []
+        fail_if_not_matches_regexp: []
+
+  # Health check with specific response validation
+  http_health_check:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200]
+      method: GET
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter Health Check"
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      fail_if_body_not_matches_regexp:
+        - '"status":\s*"healthy"'
+      fail_if_header_not_matches:
+        - header: "Content-Type"
+          regexp: "application/json"
+
+  # Readiness check with dependency validation
+  http_readiness_check:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200, 503]  # 503 is acceptable for not ready
+      method: GET
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter Readiness Check"
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      fail_if_header_not_matches:
+        - header: "Content-Type"
+          regexp: "application/json"
+
+  # Metrics endpoint check
+  http_metrics_check:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200, 404]  # 404 if metrics not enabled
+      method: GET
+      headers:
+        Host: auth-service
+        User-Agent: "Blackbox Exporter Metrics Check"
+      no_follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      fail_if_header_not_matches:
+        - header: "Content-Type"
+          regexp: "text/plain"
+
+  # Database connection check (PostgreSQL)
+  postgres_tcp:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: "ip4"
+      query_response:
+        - expect: "^\\x00\\x00\\x00\\x08\\x04\\xd2\\x16\\x2f$"  # PostgreSQL handshake
+          send: "\\x00\\x00\\x00\\x08\\x04\\xd2\\x16\\x2f"
+
+  # Redis connection check
+  redis_tcp:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: "ip4"
+      query_response:
+        - send: "PING\r\n"
+        - expect: "\\+PONG"

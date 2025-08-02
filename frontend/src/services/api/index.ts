@@ -1,0 +1,661 @@
+/**
+ * @fileoverview Main API Service Export
+ * 
+ * Centralized API interface providing:
+ * - Type-safe endpoint definitions
+ * - Unified API client access
+ * - Response transformers and validators
+ * - Service layer abstractions
+ * - Request builders and utilities
+ * - Configuration management
+ */
+
+import { z } from 'zod';
+import { apiClient, type ApiClient } from './client';
+import { authService, type AuthService } from './auth.service';
+import { userService, type UserService } from './user.service';
+import type {
+  ApiResponse,
+  ApiSuccessResponse,
+  ApiErrorResponse,
+  ApiRequestConfig,
+  ApiEndpoints,
+  ApiClientConfig,
+  TokenResponse,
+  LoginResponse,
+  RegisterResponse,
+  PaginatedResponse,
+  FileUploadResponse,
+  UserPreferences,
+} from './types';
+import {
+  validateApiResponse,
+  validatePaginatedResponse,
+  createResponseValidator,
+  extractErrorMessage,
+  createUserFriendlyError,
+  buildQueryParams,
+  buildValidatedQueryParams,
+  extractPaginationParams,
+  generateRequestCacheKey,
+} from '../utils/api-helpers';
+import type { User, LoginCredentials, RegisterData, UpdateProfileData } from '../../types';
+
+// =============================================================================
+// Response Validators
+// =============================================================================
+
+/**
+ * User response validator
+ */
+const userValidator = createResponseValidator(
+  z.object({
+    id: z.string(),
+    email: z.string().email(),
+    firstName: z.string(),
+    lastName: z.string(),
+    avatar: z.string().optional(),
+    role: z.enum(['admin', 'user', 'moderator']),
+    isActive: z.boolean(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+);
+
+/**
+ * Login response validator
+ */
+const loginResponseValidator = createResponseValidator(
+  z.object({
+    user: z.object({
+      id: z.string(),
+      email: z.string().email(),
+      firstName: z.string(),
+      lastName: z.string(),
+      avatar: z.string().optional(),
+      role: z.enum(['admin', 'user', 'moderator']),
+      isActive: z.boolean(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+    }),
+    tokens: z.object({
+      accessToken: z.string(),
+      refreshToken: z.string(),
+      tokenType: z.literal('Bearer'),
+      expiresIn: z.number(),
+      expiresAt: z.string(),
+      scope: z.array(z.string()).optional(),
+    }),
+    isFirstLogin: z.boolean().optional(),
+    requiresPasswordChange: z.boolean().optional(),
+    requiresTwoFactor: z.boolean().optional(),
+  })
+);
+
+/**
+ * Token response validator
+ */
+const tokenResponseValidator = createResponseValidator(
+  z.object({
+    accessToken: z.string(),
+    refreshToken: z.string(),
+    tokenType: z.literal('Bearer'),
+    expiresIn: z.number(),
+    expiresAt: z.string(),
+    scope: z.array(z.string()).optional(),
+  })
+);
+
+/**
+ * File upload response validator
+ */
+const fileUploadValidator = createResponseValidator(
+  z.object({
+    id: z.string(),
+    filename: z.string(),
+    originalName: z.string(),
+    mimeType: z.string(),
+    size: z.number(),
+    url: z.string().url(),
+    thumbnailUrl: z.string().url().optional(),
+    uploadedAt: z.string(),
+  })
+);
+
+// =============================================================================
+// API Endpoint Configurations
+// =============================================================================
+
+/**
+ * Complete API endpoint configuration with validation schemas
+ */
+export const apiEndpoints: ApiEndpoints = {
+  auth: {
+    login: {
+      method: 'POST',
+      path: '/auth/login',
+      requestSchema: z.object({
+        email: z.string().email(),
+        password: z.string().min(1),
+        rememberMe: z.boolean().optional(),
+      }),
+      responseSchema: loginResponseValidator,
+      config: { skipAuth: true },
+    },
+    register: {
+      method: 'POST',
+      path: '/auth/register',
+      requestSchema: z.object({
+        email: z.string().email(),
+        password: z.string().min(8),
+        firstName: z.string().min(1),
+        lastName: z.string().min(1),
+      }),
+      responseSchema: loginResponseValidator,
+      config: { skipAuth: true },
+    },
+    logout: {
+      method: 'POST',
+      path: '/auth/logout',
+      responseSchema: z.void(),
+    },
+    refresh: {
+      method: 'POST',
+      path: '/auth/refresh',
+      requestSchema: z.object({
+        refreshToken: z.string(),
+      }),
+      responseSchema: tokenResponseValidator,
+      config: { skipAuth: true, skipRefresh: true },
+    },
+    passwordReset: {
+      method: 'POST',
+      path: '/auth/password/reset',
+      requestSchema: z.object({
+        email: z.string().email(),
+        redirectUrl: z.string().url().optional(),
+      }),
+      responseSchema: z.void(),
+      config: { skipAuth: true },
+    },
+    passwordResetConfirm: {
+      method: 'POST',
+      path: '/auth/password/reset/confirm',
+      requestSchema: z.object({
+        token: z.string(),
+        password: z.string().min(8),
+        confirmPassword: z.string(),
+      }),
+      responseSchema: z.void(),
+      config: { skipAuth: true },
+    },
+    emailVerification: {
+      method: 'POST',
+      path: '/auth/email/verify',
+      requestSchema: z.object({
+        email: z.string().email(),
+        redirectUrl: z.string().url().optional(),
+      }),
+      responseSchema: z.void(),
+      config: { skipAuth: true },
+    },
+    emailVerificationConfirm: {
+      method: 'POST',
+      path: '/auth/email/verify/confirm',
+      requestSchema: z.object({
+        token: z.string(),
+        email: z.string().email().optional(),
+      }),
+      responseSchema: z.void(),
+      config: { skipAuth: true },
+    },
+    changePassword: {
+      method: 'POST',
+      path: '/auth/password/change',
+      requestSchema: z.object({
+        currentPassword: z.string(),
+        newPassword: z.string().min(8),
+        confirmPassword: z.string(),
+      }),
+      responseSchema: z.void(),
+    },
+  },
+  user: {
+    profile: {
+      method: 'GET',
+      path: '/users/profile',
+      responseSchema: userValidator,
+    },
+    updateProfile: {
+      method: 'PATCH',
+      path: '/users/profile',
+      requestSchema: z.object({
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        avatar: z.string().optional(),
+      }),
+      responseSchema: userValidator,
+    },
+    uploadAvatar: {
+      method: 'POST',
+      path: '/users/avatar',
+      responseSchema: fileUploadValidator,
+    },
+    deleteAccount: {
+      method: 'POST',
+      path: '/users/delete',
+      requestSchema: z.object({
+        password: z.string(),
+      }),
+      responseSchema: z.void(),
+    },
+    preferences: {
+      method: 'GET',
+      path: '/users/preferences',
+      responseSchema: createResponseValidator(
+        z.object({
+          theme: z.enum(['light', 'dark', 'system']),
+          language: z.string(),
+          timezone: z.string(),
+          notifications: z.object({
+            email: z.boolean(),
+            push: z.boolean(),
+            sms: z.boolean(),
+            marketing: z.boolean(),
+          }),
+          privacy: z.object({
+            profileVisible: z.boolean(),
+            showEmail: z.boolean(),
+            allowMessaging: z.boolean(),
+          }),
+        })
+      ),
+    },
+    updatePreferences: {
+      method: 'PATCH',
+      path: '/users/preferences',
+      requestSchema: z.object({
+        theme: z.enum(['light', 'dark', 'system']).optional(),
+        language: z.string().optional(),
+        timezone: z.string().optional(),
+        notifications: z.object({
+          email: z.boolean().optional(),
+          push: z.boolean().optional(),
+          sms: z.boolean().optional(),
+          marketing: z.boolean().optional(),
+        }).optional(),
+        privacy: z.object({
+          profileVisible: z.boolean().optional(),
+          showEmail: z.boolean().optional(),
+          allowMessaging: z.boolean().optional(),
+        }).optional(),
+      }),
+      responseSchema: createResponseValidator(
+        z.object({
+          theme: z.enum(['light', 'dark', 'system']),
+          language: z.string(),
+          timezone: z.string(),
+          notifications: z.object({
+            email: z.boolean(),
+            push: z.boolean(),
+            sms: z.boolean(),
+            marketing: z.boolean(),
+          }),
+          privacy: z.object({
+            profileVisible: z.boolean(),
+            showEmail: z.boolean(),
+            allowMessaging: z.boolean(),
+          }),
+        })
+      ),
+    },
+  },
+};
+
+// =============================================================================
+// Request Builders
+// =============================================================================
+
+/**
+ * Type-safe request builder for API endpoints
+ */
+export class RequestBuilder<TRequest = unknown, TResponse = unknown> {
+  constructor(
+    private readonly client: ApiClient,
+    private readonly endpoint: {
+      method: string;
+      path: string;
+      requestSchema?: z.ZodSchema<TRequest>;
+      responseSchema?: z.ZodSchema<TResponse>;
+      config?: Partial<ApiRequestConfig>;
+    }
+  ) {}
+
+  /**
+   * Execute the request with optional data and configuration
+   */
+  async execute(
+    data?: TRequest,
+    config: ApiRequestConfig = {}
+  ): Promise<ApiResponse<TResponse>> {
+    // Validate request data if schema is provided
+    if (this.endpoint.requestSchema && data !== undefined) {
+      try {
+        this.endpoint.requestSchema.parse(data);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          throw new Error(`Request validation failed: ${error.errors.map(e => e.message).join(', ')}`);
+        }
+        throw error;
+      }
+    }
+
+    // Merge configurations
+    const mergedConfig = {
+      ...this.endpoint.config,
+      ...config,
+    };
+
+    // Execute request based on method
+    let response: ApiResponse<unknown>;
+    
+    switch (this.endpoint.method.toUpperCase()) {
+      case 'GET':
+        response = await this.client.get(this.endpoint.path, mergedConfig);
+        break;
+      case 'POST':
+        response = await this.client.post(this.endpoint.path, data, mergedConfig);
+        break;
+      case 'PUT':
+        response = await this.client.put(this.endpoint.path, data, mergedConfig);
+        break;
+      case 'PATCH':
+        response = await this.client.patch(this.endpoint.path, data, mergedConfig);
+        break;
+      case 'DELETE':
+        response = await this.client.delete(this.endpoint.path, mergedConfig);
+        break;
+      default:
+        throw new Error(`Unsupported HTTP method: ${this.endpoint.method}`);
+    }
+
+    // Validate response if schema is provided
+    if (this.endpoint.responseSchema && response.success) {
+      try {
+        const validatedData = this.endpoint.responseSchema.parse(response.data);
+        return {
+          ...response,
+          data: validatedData,
+        } as ApiResponse<TResponse>;
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          throw new Error(`Response validation failed: ${error.errors.map(e => e.message).join(', ')}`);
+        }
+        throw error;
+      }
+    }
+
+    return response as ApiResponse<TResponse>;
+  }
+}
+
+// =============================================================================
+// Main API Class
+// =============================================================================
+
+/**
+ * Main API service class providing centralized access to all API operations
+ */
+export class ApiService {
+  public readonly client: ApiClient;
+  public readonly auth: AuthService;
+  public readonly user: UserService;
+
+  constructor(config?: Partial<ApiClientConfig>) {
+    this.client = config ? new (apiClient.constructor as typeof ApiClient)(config) : apiClient;
+    this.auth = authService;
+    this.user = userService;
+  }
+
+  // ===========================================================================
+  // Request Builder Factory Methods
+  // ===========================================================================
+
+  /**
+   * Create a type-safe request builder for authentication endpoints
+   */
+  createAuthRequest<K extends keyof ApiEndpoints['auth']>(
+    endpoint: K
+  ): RequestBuilder<
+    Parameters<ApiEndpoints['auth'][K]['requestSchema']['parse']>[0],
+    ReturnType<ApiEndpoints['auth'][K]['responseSchema']['parse']>
+  > {
+    return new RequestBuilder(this.client, apiEndpoints.auth[endpoint]);
+  }
+
+  /**
+   * Create a type-safe request builder for user endpoints
+   */
+  createUserRequest<K extends keyof ApiEndpoints['user']>(
+    endpoint: K
+  ): RequestBuilder<
+    Parameters<ApiEndpoints['user'][K]['requestSchema']['parse']>[0],
+    ReturnType<ApiEndpoints['user'][K]['responseSchema']['parse']>
+  > {
+    return new RequestBuilder(this.client, apiEndpoints.user[endpoint]);
+  }
+
+  // ===========================================================================
+  // Convenience Methods
+  // ===========================================================================
+
+  /**
+   * Login with credentials
+   */
+  async login(credentials: LoginCredentials): Promise<ApiResponse<LoginResponse>> {
+    const response = await this.auth.login(credentials);
+    return loginResponseValidator(response);
+  }
+
+  /**
+   * Register new user
+   */
+  async register(data: RegisterData): Promise<ApiResponse<RegisterResponse>> {
+    const response = await this.auth.register({
+      ...data,
+      confirmPassword: data.password, // For compatibility
+      acceptTerms: true, // Assume terms are accepted
+    });
+    return loginResponseValidator(response);
+  }
+
+  /**
+   * Get current user profile
+   */
+  async getCurrentUser(): Promise<ApiResponse<User>> {
+    const response = await this.user.getProfile();
+    return userValidator(response);
+  }
+
+  /**
+   * Update user profile
+   */
+  async updateUserProfile(data: UpdateProfileData): Promise<ApiResponse<User>> {
+    const response = await this.user.updateProfile(data);
+    return userValidator(response);
+  }
+
+  /**
+   * Upload user avatar
+   */
+  async uploadUserAvatar(file: File): Promise<ApiResponse<FileUploadResponse>> {
+    const response = await this.user.uploadAvatar(file);
+    return fileUploadValidator(response);
+  }
+
+  /**
+   * Get user preferences
+   */
+  async getUserPreferences(): Promise<ApiResponse<UserPreferences>> {
+    return this.user.getPreferences();
+  }
+
+  /**
+   * Update user preferences
+   */
+  async updateUserPreferences(
+    preferences: Partial<UserPreferences>
+  ): Promise<ApiResponse<UserPreferences>> {
+    return this.user.updatePreferences(preferences);
+  }
+
+  // ===========================================================================
+  // Utility Methods
+  // ===========================================================================
+
+  /**
+   * Build query parameters for requests
+   */
+  buildQuery(params: Record<string, unknown>): URLSearchParams {
+    return buildQueryParams(params);
+  }
+
+  /**
+   * Build validated query parameters
+   */
+  buildValidatedQuery<T extends Record<string, unknown>>(
+    params: T,
+    schema: z.ZodSchema<T>
+  ): URLSearchParams {
+    return buildValidatedQueryParams(params, schema);
+  }
+
+  /**
+   * Extract pagination parameters from query
+   */
+  extractPagination(params: Record<string, unknown>): {
+    page: number;
+    limit: number;
+    offset: number;
+  } {
+    return extractPaginationParams(params);
+  }
+
+  /**
+   * Create user-friendly error message
+   */
+  createErrorMessage(error: unknown, fallback?: string): string {
+    return createUserFriendlyError(error, fallback);
+  }
+
+  /**
+   * Extract error details
+   */
+  extractError(error: unknown): {
+    message: string;
+    code?: string;
+    statusCode?: number;
+    fieldErrors: Record<string, string[]>;
+  } {
+    return extractErrorMessage(error);
+  }
+
+  /**
+   * Cancel request by key
+   */
+  cancelRequest(key: string, reason?: string): boolean {
+    return this.client.cancelRequest(key, reason);
+  }
+
+  /**
+   * Cancel all pending requests
+   */
+  cancelAllRequests(reason?: string): void {
+    this.client.cancelAllRequests(reason);
+  }
+
+  /**
+   * Update API configuration
+   */
+  updateConfig(config: Partial<ApiClientConfig>): void {
+    this.client.updateConfig(config);
+  }
+
+  /**
+   * Get current API configuration
+   */
+  getConfig(): Readonly<ApiClientConfig> {
+    return this.client.getConfig();
+  }
+}
+
+// =============================================================================
+// Singleton Instance and Exports
+// =============================================================================
+
+/**
+ * Default API service instance
+ */
+export const api = new ApiService();
+
+// Re-export all types and utilities
+export type {
+  // Core types
+  ApiResponse,
+  ApiSuccessResponse,
+  ApiErrorResponse,
+  ApiRequestConfig,
+  ApiClientConfig,
+  
+  // Response types
+  LoginResponse,
+  RegisterResponse,
+  TokenResponse,
+  FileUploadResponse,
+  UserPreferences,
+  PaginatedResponse,
+  
+  // Service types
+  ApiService as ApiServiceType,
+  AuthService as AuthServiceType,
+  UserService as UserServiceType,
+  
+  // Endpoint types
+  ApiEndpoints,
+} from './types';
+
+// Re-export error handling
+export { ApiError, ApiErrorCode } from './client';
+
+// Re-export services for direct access
+export { authService, userService };
+
+// Re-export utilities
+export {
+  // Validation utilities
+  validateApiResponse,
+  validatePaginatedResponse,
+  createResponseValidator,
+  
+  // Error utilities
+  extractErrorMessage,
+  createUserFriendlyError,
+  
+  // Query utilities
+  buildQueryParams,
+  buildValidatedQueryParams,
+  extractPaginationParams,
+  
+  // File utilities
+  validateFile,
+  createMultipartFormData,
+  formatFileSize,
+  
+  // Request utilities
+  generateRequestCacheKey,
+  debounce,
+  throttle,
+} from '../utils/api-helpers';
+
+// Default export
+export default api;

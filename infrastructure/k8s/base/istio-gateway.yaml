@@ -1,0 +1,278 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: api-gateway-gateway
+  labels:
+    app: api-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - api.example.com
+    - gateway.internal
+    tls:
+      redirectHttps: true
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: api-gateway-tls
+    hosts:
+    - api.example.com
+    - gateway.internal
+  - port:
+      number: 8080
+      name: websocket
+      protocol: HTTP
+    hosts:
+    - ws.example.com
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: api-gateway-vs
+  labels:
+    app: api-gateway
+spec:
+  hosts:
+  - api.example.com
+  - gateway.internal
+  gateways:
+  - api-gateway-gateway
+  http:
+  # Health checks - no authentication required
+  - match:
+    - uri:
+        prefix: /health
+    - uri:
+        prefix: /ready
+    - uri:
+        prefix: /metrics
+    route:
+    - destination:
+        host: api-gateway
+        port:
+          number: 8000
+    timeout: 10s
+    retries:
+      attempts: 3
+      perTryTimeout: 3s
+  
+  # Authentication endpoints - no authentication required
+  - match:
+    - uri:
+        prefix: /api/v1/auth/login
+    - uri:
+        prefix: /api/v1/auth/register
+    - uri:
+        prefix: /api/v1/auth/password-reset
+    - uri:
+        prefix: /api/v1/auth/verify-email
+    route:
+    - destination:
+        host: api-gateway
+        port:
+          number: 8000
+    timeout: 30s
+    retries:
+      attempts: 2
+      perTryTimeout: 15s
+    headers:
+      request:
+        add:
+          x-forwarded-proto: https
+          x-forwarded-for: "%DOWNSTREAM_REMOTE_ADDRESS%"
+  
+  # API endpoints - authentication required
+  - match:
+    - uri:
+        prefix: /api/v1/
+    route:
+    - destination:
+        host: api-gateway
+        port:
+          number: 8000
+    timeout: 60s
+    retries:
+      attempts: 2
+      perTryTimeout: 30s
+    headers:
+      request:
+        add:
+          x-forwarded-proto: https
+          x-forwarded-for: "%DOWNSTREAM_REMOTE_ADDRESS%"
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 1s
+  
+  # Documentation - internal access only
+  - match:
+    - uri:
+        prefix: /docs
+    - uri:
+        prefix: /redoc
+    - uri:
+        prefix: /openapi.json
+    route:
+    - destination:
+        host: api-gateway
+        port:
+          number: 8000
+    timeout: 10s
+    headers:
+      request:
+        add:
+          x-internal-access: "true"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: websocket-vs
+  labels:
+    app: api-gateway
+spec:
+  hosts:
+  - ws.example.com
+  gateways:
+  - api-gateway-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /ws/
+    route:
+    - destination:
+        host: api-gateway
+        port:
+          number: 8001
+    timeout: 3600s  # Long timeout for WebSocket connections
+    headers:
+      request:
+        add:
+          x-forwarded-proto: https
+          x-forwarded-for: "%DOWNSTREAM_REMOTE_ADDRESS%"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api-gateway-dr
+  labels:
+    app: api-gateway
+spec:
+  host: api-gateway
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 30s
+        tcpNoDelay: true
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 2
+        maxRetries: 3
+        idleTimeout: 60s
+        h2UpgradePolicy: UPGRADE
+    loadBalancer:
+      simple: LEAST_CONN
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+  portLevelSettings:
+  - port:
+      number: 8000
+    connectionPool:
+      tcp:
+        maxConnections: 50
+      http:
+        http1MaxPendingRequests: 25
+        maxRequestsPerConnection: 1
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: api-gateway-authz
+  labels:
+    app: api-gateway
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  rules:
+  # Allow health checks from anywhere
+  - to:
+    - operation:
+        paths: ["/health", "/ready", "/metrics"]
+  
+  # Allow authentication endpoints
+  - to:
+    - operation:
+        paths: ["/api/v1/auth/*"]
+  
+  # Allow API access with JWT token
+  - to:
+    - operation:
+        paths: ["/api/v1/*"]
+    when:
+    - key: request.headers[authorization]
+      values: ["Bearer *"]
+  
+  # Allow WebSocket connections
+  - to:
+    - operation:
+        paths: ["/ws/*"]
+    when:
+    - key: request.headers[upgrade]
+      values: ["websocket"]
+  
+  # Internal documentation access
+  - to:
+    - operation:
+        paths: ["/docs", "/redoc", "/openapi.json"]
+    when:
+    - key: source.namespace
+      values: ["istio-system", "monitoring"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: api-gateway-mtls
+  labels:
+    app: api-gateway
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  mtls:
+    mode: STRICT
+---
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: external-auth-provider
+  labels:
+    app: api-gateway
+spec:
+  hosts:
+  - auth.external-provider.com
+  ports:
+  - number: 443
+    name: https
+    protocol: HTTPS
+  - number: 80
+    name: http
+    protocol: HTTP
+  location: MESH_EXTERNAL
+  resolution: DNS

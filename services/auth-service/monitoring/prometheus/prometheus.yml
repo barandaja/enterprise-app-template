@@ -1,0 +1,202 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    cluster: 'auth-service'
+    environment: '${ENVIRONMENT:-development}'
+    region: '${REGION:-local}'
+
+# Rules and alerting
+rule_files:
+  - "alerts.yml"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      scheme: http
+      timeout: 10s
+      api_version: v2
+
+# Scrape configurations
+scrape_configs:
+  # Auth Service - Main application metrics
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['${AUTH_SERVICE_HOST:-host.docker.internal}:${AUTH_SERVICE_PORT:-8000}']
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    scheme: http
+    honor_labels: false
+    honor_timestamps: true
+    params:
+      format:
+        - prometheus
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: '${AUTH_SERVICE_HOST:-host.docker.internal}:${AUTH_SERVICE_PORT:-8000}'
+      - target_label: service
+        replacement: 'auth-service'
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # AlertManager
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Node Exporter - System metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: service
+        replacement: 'system'
+
+  # cAdvisor - Container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: service
+        replacement: 'containers'
+
+  # Redis Exporter - Redis metrics
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    relabel_configs:
+      - target_label: service
+        replacement: 'redis'
+
+  # PostgreSQL Exporter - Database metrics
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    relabel_configs:
+      - target_label: service
+        replacement: 'postgresql'
+
+  # Blackbox Exporter - External endpoint monitoring
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - '${AUTH_SERVICE_EXTERNAL_URL:-http://localhost:8000}/health'
+          - '${AUTH_SERVICE_EXTERNAL_URL:-http://localhost:8000}/ready'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'auth-service-external'
+
+  # SSL Certificate monitoring
+  - job_name: 'blackbox-ssl'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - '${AUTH_SERVICE_DOMAIN:-localhost}:443'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'ssl-certificates'
+
+  # Database health checks
+  - job_name: 'blackbox-database'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - '${DATABASE_HOST:-localhost}:${DATABASE_PORT:-5432}'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'database-connectivity'
+
+  # Redis health checks
+  - job_name: 'blackbox-redis'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - '${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'redis-connectivity'
+
+# Remote write configuration (for long-term storage)
+remote_write:
+  - url: '${PROMETHEUS_REMOTE_WRITE_URL}'
+    remote_timeout: 30s
+    queue_config:
+      capacity: 2500
+      max_shards: 200
+      min_shards: 1
+      max_samples_per_send: 500
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 100ms
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'up|scrape_.*'
+        action: drop
+    enabled: ${PROMETHEUS_REMOTE_WRITE_ENABLED:-false}
+
+# Storage configuration
+storage:
+  tsdb:
+    retention_time: 30d
+    retention_size: 50GB

@@ -1,0 +1,464 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Auth Service Overview",
+    "tags": ["auth-service", "monitoring", "overview"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "changes(process_start_time_seconds{job=\"auth-service\"}[1h])",
+          "iconColor": "blue",
+          "textColumn": "title"
+        }
+      ]
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "instance",
+          "type": "query",
+          "query": "label_values(up{job=\"auth-service\"}, instance)",
+          "refresh": 1,
+          "includeAll": true,
+          "allValue": ".*",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Service Status",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "up{job=\"auth-service\", instance=~\"$instance\"}",
+            "legendFormat": "{{instance}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"type": "value", "value": "0", "text": "DOWN", "color": "red"},
+              {"type": "value", "value": "1", "text": "UP", "color": "green"}
+            ],
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "green", "value": 1}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Request Rate",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total{job=\"auth-service\", instance=~\"$instance\"}[5m]))",
+            "legendFormat": "Requests/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 100},
+                {"color": "red", "value": 500}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Error Rate",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total{job=\"auth-service\", instance=~\"$instance\", status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"auth-service\", instance=~\"$instance\"}[5m])) * 100",
+            "legendFormat": "Error Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 1},
+                {"color": "red", "value": 5}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Response Time (P95)",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"auth-service\", instance=~\"$instance\"}[5m])) by (le))",
+            "legendFormat": "P95 Response Time"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.5},
+                {"color": "red", "value": 1.0}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Database Connection Pool Utilization",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "(auth_service_db_connections_active{instance=~\"$instance\"} / auth_service_db_connections_total{instance=~\"$instance\"}) * 100",
+            "legendFormat": "{{instance}} - Pool Utilization %"
+          },
+          {
+            "expr": "70",
+            "legendFormat": "Warning Threshold (70%)"
+          },
+          {
+            "expr": "90",
+            "legendFormat": "Critical Threshold (90%)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 70},
+                {"color": "red", "value": 90}
+              ]
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Warning Threshold (70%)"},
+              "properties": [
+                {"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}},
+                {"id": "custom.fillOpacity", "value": 0}
+              ]
+            },
+            {
+              "matcher": {"id": "byName", "options": "Critical Threshold (90%)"},
+              "properties": [
+                {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}},
+                {"id": "custom.fillOpacity", "value": 0}
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 6,
+        "title": "Authentication Metrics",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(auth_service_auth_attempts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Auth Attempts/sec"
+          },
+          {
+            "expr": "rate(auth_service_auth_failures_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Auth Failures/sec"
+          },
+          {
+            "expr": "(rate(auth_service_auth_failures_total{instance=~\"$instance\"}[5m]) / rate(auth_service_auth_attempts_total{instance=~\"$instance\"}[5m])) * 100",
+            "legendFormat": "{{instance}} - Failure Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Response Time Distribution",
+        "type": "heatmap",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "sum(rate(http_request_duration_seconds_bucket{job=\"auth-service\", instance=~\"$instance\"}[5m])) by (le)",
+            "format": "heatmap",
+            "legendFormat": "{{le}}"
+          }
+        ],
+        "heatmap": {
+          "xBucketSize": null,
+          "yBucketSize": null,
+          "yBucketNumber": null
+        }
+      },
+      {
+        "id": 8,
+        "title": "Connection Timeouts",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "rate(auth_service_db_connection_timeouts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - DB Connection Timeouts/sec"
+          },
+          {
+            "expr": "rate(auth_service_redis_connection_timeouts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Redis Connection Timeouts/sec"
+          },
+          {
+            "expr": "(rate(auth_service_db_connection_timeouts_total{instance=~\"$instance\"}[5m]) / rate(auth_service_db_connections_attempted_total{instance=~\"$instance\"}[5m])) * 100",
+            "legendFormat": "{{instance}} - DB Timeout Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.01},
+                {"color": "red", "value": 0.05}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Security Alerts",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "rate(auth_service_encryption_errors_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Encryption Errors/sec"
+          },
+          {
+            "expr": "rate(auth_service_email_hash_collisions_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Email Hash Collisions/sec"
+          },
+          {
+            "expr": "rate(auth_service_rate_limit_violations_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Rate Limit Violations/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "red", "value": 0.0001}
+              ]
+            }
+          }
+        },
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [0], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"params": [], "type": "last"},
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "frequency": "30s",
+          "handler": 1,
+          "name": "Security Issues Detected",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      },
+      {
+        "id": 10,
+        "title": "Memory Usage",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job=\"auth-service\", instance=~\"$instance\"} / 1024 / 1024",
+            "legendFormat": "{{instance}} - RSS Memory (MB)"
+          },
+          {
+            "expr": "process_virtual_memory_bytes{job=\"auth-service\", instance=~\"$instance\"} / 1024 / 1024",
+            "legendFormat": "{{instance}} - Virtual Memory (MB)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "MB"
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "CPU Usage",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"auth-service\", instance=~\"$instance\"}[5m]) * 100",
+            "legendFormat": "{{instance}} - CPU Usage %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 70},
+                {"color": "red", "value": 90}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 12,
+        "title": "Top Endpoints by Request Count",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
+        "targets": [
+          {
+            "expr": "topk(10, sum by (endpoint) (rate(http_requests_total{job=\"auth-service\", instance=~\"$instance\"}[5m])))",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true
+              },
+              "renameByName": {
+                "endpoint": "Endpoint",
+                "Value": "Requests/sec"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Top Endpoints by Response Time",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
+        "targets": [
+          {
+            "expr": "topk(10, histogram_quantile(0.95, sum by (endpoint, le) (rate(http_request_duration_seconds_bucket{job=\"auth-service\", instance=~\"$instance\"}[5m]))))",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "le": true
+              },
+              "renameByName": {
+                "endpoint": "Endpoint",
+                "Value": "P95 Response Time (s)"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Session Management",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 48},
+        "targets": [
+          {
+            "expr": "rate(auth_service_session_creation_attempts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Session Creation Attempts/sec"
+          },
+          {
+            "expr": "rate(auth_service_session_creation_failures_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Session Creation Failures/sec"
+          },
+          {
+            "expr": "(rate(auth_service_session_creation_failures_total{instance=~\"$instance\"}[5m]) / rate(auth_service_session_creation_attempts_total{instance=~\"$instance\"}[5m])) * 100",
+            "legendFormat": "{{instance}} - Session Failure Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 15,
+        "title": "Token Validation",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 48},
+        "targets": [
+          {
+            "expr": "rate(auth_service_token_validation_attempts_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Token Validation Attempts/sec"
+          },
+          {
+            "expr": "rate(auth_service_token_validation_failures_total{instance=~\"$instance\"}[5m])",
+            "legendFormat": "{{instance}} - Token Validation Failures/sec"
+          },
+          {
+            "expr": "(rate(auth_service_token_validation_failures_total{instance=~\"$instance\"}[5m]) / rate(auth_service_token_validation_attempts_total{instance=~\"$instance\"}[5m])) * 100",
+            "legendFormat": "{{instance}} - Token Validation Failure Rate %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      }
+    ]
+  }
+}

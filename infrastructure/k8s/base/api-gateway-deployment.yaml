@@ -1,0 +1,209 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+    version: v1
+    component: gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-gateway
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: v1
+        component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: api-gateway
+      containers:
+      - name: api-gateway
+        image: api-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        - name: websocket
+          containerPort: 8001
+          protocol: TCP
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: api-gateway-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: api-gateway-secrets
+              key: redis-url
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-gateway-secrets
+              key: secret-key
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:8000"
+        - name: USER_SERVICE_URL
+          value: "http://user-service:8000"
+        - name: BUSINESS_SERVICE_URLS
+          value: "business-service-1=http://business-service-1:8000,business-service-2=http://business-service-2:8000"
+        - name: CORS_ORIGINS
+          value: "https://app.example.com,https://admin.example.com"
+        - name: ALLOWED_HOSTS
+          value: "api.example.com,gateway.internal"
+        - name: JAEGER_ENDPOINT
+          value: "http://jaeger-collector:14268/api/traces"
+        - name: PROMETHEUS_MULTIPROC_DIR
+          value: "/tmp/prometheus_multiproc"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        volumeMounts:
+        - name: prometheus-multiproc
+          mountPath: /tmp/prometheus_multiproc
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 65534
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: prometheus-multiproc
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: api-gateway-config
+      securityContext:
+        fsGroup: 65534
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - api-gateway
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+    component: gateway
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http
+    protocol: TCP
+  - name: websocket
+    port: 8001
+    targetPort: websocket
+    protocol: TCP
+  selector:
+    app: api-gateway
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  labels:
+    app: api-gateway
+data:
+  gateway.yaml: |
+    # API Gateway Configuration
+    rate_limiting:
+      global_requests_per_minute: 1000
+      user_requests_per_minute: 100
+      ip_requests_per_minute: 200
+    
+    circuit_breaker:
+      failure_threshold: 5
+      timeout: 60
+      reset_timeout: 300
+    
+    caching:
+      default_ttl: 300
+      auth_ttl: 600
+      max_size: 10000
+    
+    logging:
+      level: INFO
+      format: json
+    
+    compliance:
+      gdpr_enabled: true
+      hipaa_enabled: true
+      soc2_enabled: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-gateway-secrets
+  labels:
+    app: api-gateway
+type: Opaque
+data:
+  # Base64 encoded values - these should be managed by your secret management system
+  database-url: cG9zdGdyZXNxbDovL3VzZXI6cGFzc0Bsb2NhbGhvc3Q6NTQzMi9hcGlfZ2F0ZXdheQ==
+  redis-url: cmVkaXM6Ly9sb2NhbGhvc3Q6NjM3OS8w
+  secret-key: c3VwZXItc2VjcmV0LWtleS1mb3ItYXBpLWdhdGV3YXk=

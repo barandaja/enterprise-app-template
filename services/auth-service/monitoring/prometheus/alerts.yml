@@ -1,0 +1,311 @@
+groups:
+  - name: auth-service.critical
+    rules:
+      # Connection Pool Utilization > 70%
+      - alert: DatabaseConnectionPoolHigh
+        expr: (auth_service_db_connections_active / auth_service_db_connections_total) * 100 > 70
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: database
+        annotations:
+          summary: "Database connection pool utilization is high"
+          description: "Connection pool utilization is {{ $value }}% for auth service. Threshold is 70%."
+          runbook_url: "https://your-docs.com/runbooks/database-connection-pool"
+
+      - alert: DatabaseConnectionPoolCritical
+        expr: (auth_service_db_connections_active / auth_service_db_connections_total) * 100 > 90
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: database
+        annotations:
+          summary: "Database connection pool utilization is critical"
+          description: "Connection pool utilization is {{ $value }}% for auth service. Immediate action required."
+          runbook_url: "https://your-docs.com/runbooks/database-connection-pool"
+
+      # Redis Connection Pool Utilization > 70%
+      - alert: RedisConnectionPoolHigh
+        expr: (auth_service_redis_connections_active / auth_service_redis_connections_total) * 100 > 70
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: cache
+        annotations:
+          summary: "Redis connection pool utilization is high"
+          description: "Redis connection pool utilization is {{ $value }}% for auth service. Threshold is 70%."
+          runbook_url: "https://your-docs.com/runbooks/redis-connection-pool"
+
+      # Encryption/Decryption Error Rate > 0
+      - alert: EncryptionErrorsDetected
+        expr: rate(auth_service_encryption_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: security
+        annotations:
+          summary: "Encryption/decryption errors detected"
+          description: "Encryption error rate is {{ $value }} errors/sec. This should be zero."
+          runbook_url: "https://your-docs.com/runbooks/encryption-errors"
+
+      # Email Hash Collision Rate (should be 0)
+      - alert: EmailHashCollisionsDetected
+        expr: rate(auth_service_email_hash_collisions_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: security
+        annotations:
+          summary: "Email hash collisions detected"
+          description: "Email hash collision rate is {{ $value }} collisions/sec. This indicates a serious security issue."
+          runbook_url: "https://your-docs.com/runbooks/email-hash-collisions"
+
+      # Connection Timeout Rate > 1%
+      - alert: DatabaseConnectionTimeoutHigh
+        expr: (rate(auth_service_db_connection_timeouts_total[5m]) / rate(auth_service_db_connections_attempted_total[5m])) * 100 > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: database
+        annotations:
+          summary: "High database connection timeout rate"
+          description: "Database connection timeout rate is {{ $value }}%. Threshold is 1%."
+          runbook_url: "https://your-docs.com/runbooks/connection-timeouts"
+
+      - alert: RedisConnectionTimeoutHigh
+        expr: (rate(auth_service_redis_connection_timeouts_total[5m]) / rate(auth_service_redis_connections_attempted_total[5m])) * 100 > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: cache
+        annotations:
+          summary: "High Redis connection timeout rate"
+          description: "Redis connection timeout rate is {{ $value }}%. Threshold is 1%."
+          runbook_url: "https://your-docs.com/runbooks/connection-timeouts"
+
+      # Authentication Failure Rate > 10%
+      - alert: AuthenticationFailureRateHigh
+        expr: (rate(auth_service_auth_failures_total[5m]) / rate(auth_service_auth_attempts_total[5m])) * 100 > 10
+        for: 3m
+        labels:
+          severity: warning
+          service: auth-service
+          category: security
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Authentication failure rate is {{ $value }}%. Threshold is 10%."
+          runbook_url: "https://your-docs.com/runbooks/auth-failure-rate"
+
+      - alert: AuthenticationFailureRateCritical
+        expr: (rate(auth_service_auth_failures_total[5m]) / rate(auth_service_auth_attempts_total[5m])) * 100 > 25
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: security
+        annotations:
+          summary: "Critical authentication failure rate"
+          description: "Authentication failure rate is {{ $value }}%. This may indicate an attack."
+          runbook_url: "https://your-docs.com/runbooks/auth-failure-rate"
+
+      # Response Time > 500ms for auth endpoints
+      - alert: AuthEndpointResponseTimeSlow
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="auth-service", endpoint=~"/api/v1/auth/.*"}[5m])) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          service: auth-service
+          category: performance
+        annotations:
+          summary: "Auth endpoints responding slowly"
+          description: "95th percentile response time for auth endpoints is {{ $value }}s. Threshold is 0.5s."
+          runbook_url: "https://your-docs.com/runbooks/slow-response-times"
+
+      - alert: AuthEndpointResponseTimeCritical
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="auth-service", endpoint=~"/api/v1/auth/.*"}[5m])) > 1.0
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: performance
+        annotations:
+          summary: "Auth endpoints responding very slowly"
+          description: "95th percentile response time for auth endpoints is {{ $value }}s. Immediate action required."
+          runbook_url: "https://your-docs.com/runbooks/slow-response-times"
+
+  - name: auth-service.additional
+    rules:
+      # Service Health
+      - alert: AuthServiceDown
+        expr: up{job="auth-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: availability
+        annotations:
+          summary: "Auth service is down"
+          description: "Auth service has been down for more than 1 minute."
+          runbook_url: "https://your-docs.com/runbooks/service-down"
+
+      # Error Rate
+      - alert: AuthServiceErrorRateHigh
+        expr: (rate(http_requests_total{job="auth-service", status=~"5.."}[5m]) / rate(http_requests_total{job="auth-service"}[5m])) * 100 > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: reliability
+        annotations:
+          summary: "High error rate in auth service"
+          description: "Error rate is {{ $value }}% over the last 5 minutes. Threshold is 5%."
+          runbook_url: "https://your-docs.com/runbooks/high-error-rate"
+
+      # Memory Usage
+      - alert: AuthServiceMemoryUsageHigh
+        expr: (process_resident_memory_bytes{job="auth-service"} / 1024 / 1024 / 1024) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: auth-service
+          category: resources
+        annotations:
+          summary: "Auth service memory usage is high"
+          description: "Memory usage is {{ $value }}GB. Consider investigating memory leaks."
+          runbook_url: "https://your-docs.com/runbooks/high-memory-usage"
+
+      # CPU Usage
+      - alert: AuthServiceCPUUsageHigh
+        expr: rate(process_cpu_seconds_total{job="auth-service"}[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: auth-service
+          category: resources
+        annotations:
+          summary: "Auth service CPU usage is high"
+          description: "CPU usage is {{ $value }}%. Consider scaling or investigating performance issues."
+          runbook_url: "https://your-docs.com/runbooks/high-cpu-usage"
+
+      # Rate Limiting
+      - alert: RateLimitViolationsHigh
+        expr: rate(auth_service_rate_limit_violations_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: security
+        annotations:
+          summary: "High rate of rate limit violations"
+          description: "Rate limit violations are occurring at {{ $value }} violations/sec."
+          runbook_url: "https://your-docs.com/runbooks/rate-limit-violations"
+
+      # Session Management
+      - alert: SessionCreationFailureRateHigh
+        expr: (rate(auth_service_session_creation_failures_total[5m]) / rate(auth_service_session_creation_attempts_total[5m])) * 100 > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: sessions
+        annotations:
+          summary: "High session creation failure rate"
+          description: "Session creation failure rate is {{ $value }}%. Threshold is 5%."
+          runbook_url: "https://your-docs.com/runbooks/session-failures"
+
+      # Token Validation
+      - alert: TokenValidationFailureRateHigh
+        expr: (rate(auth_service_token_validation_failures_total[5m]) / rate(auth_service_token_validation_attempts_total[5m])) * 100 > 15
+        for: 3m
+        labels:
+          severity: warning
+          service: auth-service
+          category: security
+        annotations:
+          summary: "High token validation failure rate"
+          description: "Token validation failure rate is {{ $value }}%. This may indicate token expiration issues or attacks."
+          runbook_url: "https://your-docs.com/runbooks/token-validation-failures"
+
+      # Database Query Performance
+      - alert: DatabaseQueryTimeHigh
+        expr: histogram_quantile(0.95, rate(auth_service_db_query_duration_seconds_bucket[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          service: auth-service
+          category: database
+        annotations:
+          summary: "Database queries are slow"
+          description: "95th percentile database query time is {{ $value }}s. Threshold is 0.1s."
+          runbook_url: "https://your-docs.com/runbooks/slow-database-queries"
+
+      # Audit Log Issues
+      - alert: AuditLogWriteFailures
+        expr: rate(auth_service_audit_log_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: compliance
+        annotations:
+          summary: "Audit log write failures detected"
+          description: "Audit log write failures at {{ $value }} failures/sec. This is a compliance violation."
+          runbook_url: "https://your-docs.com/runbooks/audit-log-failures"
+
+      # GDPR/Compliance Alerts
+      - alert: DataRetentionPolicyViolation
+        expr: auth_service_data_retention_violations_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: compliance
+        annotations:
+          summary: "Data retention policy violations detected"
+          description: "{{ $value }} data retention policy violations detected. Immediate action required for compliance."
+          runbook_url: "https://your-docs.com/runbooks/data-retention-violations"
+
+      # Password Security
+      - alert: WeakPasswordAttemptsHigh
+        expr: rate(auth_service_weak_password_attempts_total[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: auth-service
+          category: security
+        annotations:
+          summary: "High rate of weak password attempts"
+          description: "Weak password attempts at {{ $value }} attempts/sec. May indicate brute force attack."
+          runbook_url: "https://your-docs.com/runbooks/weak-password-attempts"
+
+      # SSL/TLS Certificate Expiry
+      - alert: SSLCertificateExpiringSoon
+        expr: auth_service_ssl_cert_expiry_days < 30
+        for: 1m
+        labels:
+          severity: warning
+          service: auth-service
+          category: security
+        annotations:
+          summary: "SSL certificate expiring soon"
+          description: "SSL certificate expires in {{ $value }} days."
+          runbook_url: "https://your-docs.com/runbooks/ssl-certificate-expiry"
+
+      - alert: SSLCertificateExpiringCritical
+        expr: auth_service_ssl_cert_expiry_days < 7
+        for: 1m
+        labels:
+          severity: critical
+          service: auth-service
+          category: security
+        annotations:
+          summary: "SSL certificate expiring very soon"
+          description: "SSL certificate expires in {{ $value }} days. Immediate renewal required."
+          runbook_url: "https://your-docs.com/runbooks/ssl-certificate-expiry"

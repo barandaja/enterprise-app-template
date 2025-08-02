@@ -1,0 +1,295 @@
+global:
+  # The smarthost and SMTP sender used for mail notifications.
+  smtp_smarthost: '${SMTP_HOST}:${SMTP_PORT}'
+  smtp_from: '${SMTP_FROM_EMAIL}'
+  smtp_auth_username: '${SMTP_USER}'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+
+  # Default template
+  resolve_timeout: 5m
+
+# Templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Alert routing configuration
+route:
+  # Root route - all alerts go through here
+  group_by: ['alertname', 'service', 'category']
+  group_wait: 30s        # Wait time for grouping alerts
+  group_interval: 5m     # Time between notification batches for same group
+  repeat_interval: 12h   # Time before re-sending notifications
+  receiver: 'default'
+
+  # Specific routing for different alert types
+  routes:
+    # Critical alerts - immediate notification to on-call
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 5m
+      routes:
+        # Security incidents require immediate escalation
+        - match:
+            category: security
+          receiver: 'security-team'
+          group_wait: 5s
+          repeat_interval: 2m
+        
+        # Compliance violations require immediate escalation
+        - match:
+            category: compliance
+          receiver: 'compliance-team'
+          group_wait: 5s
+          repeat_interval: 2m
+
+    # Warning alerts - notify team during business hours
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 2m
+      group_interval: 10m
+      repeat_interval: 4h
+
+    # Database specific alerts
+    - match:
+        category: database
+      receiver: 'database-team'
+      group_interval: 5m
+
+    # Performance alerts
+    - match:
+        category: performance
+      receiver: 'performance-team'
+      group_interval: 10m
+
+# Inhibition rules - suppress certain alerts when others are firing
+inhibit_rules:
+  # Suppress auth endpoint slow alerts if service is down
+  - source_matchers:
+      - alertname = "AuthServiceDown"
+    target_matchers:
+      - alertname = "AuthEndpointResponseTimeSlow"
+    equal: ['service']
+
+  # Suppress connection pool alerts if database is down
+  - source_matchers:
+      - alertname = "DatabaseDown"
+    target_matchers:
+      - alertname = "DatabaseConnectionPoolHigh"
+      - alertname = "DatabaseConnectionTimeoutHigh"
+    equal: ['service']
+
+  # Suppress warning level alerts when critical level is active
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ['alertname', 'service']
+
+# Notification receivers
+receivers:
+  # Default catch-all receiver
+  - name: 'default'
+    email_configs:
+      - to: '${DEFAULT_EMAIL}'
+        subject: '[{{ .Status | toUpper }}] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          Severity: {{ .Labels.severity }}
+          Category: {{ .Labels.category }}
+          Runbook: {{ .Annotations.runbook_url }}
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
+
+  # Critical alerts - multiple notification channels
+  - name: 'critical-alerts'
+    email_configs:
+      - to: '${ONCALL_EMAIL}'
+        subject: '[CRITICAL] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          🚨 CRITICAL ALERT 🚨
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          Category: {{ .Labels.category }}
+          
+          🔗 Runbook: {{ .Annotations.runbook_url }}
+          📊 Dashboard: ${GRAFANA_BASE_URL}/d/auth-service/auth-service-overview
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
+    
+    # Slack notification for critical alerts
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '${CRITICAL_SLACK_CHANNEL}'
+        title: '🚨 CRITICAL: {{ .GroupLabels.service }} Alert'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          
+          *Service:* {{ .Labels.service }}
+          *Category:* {{ .Labels.category }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        color: 'danger'
+        send_resolved: true
+
+    # PagerDuty integration for critical alerts
+    pagerduty_configs:
+      - routing_key: '${PAGERDUTY_INTEGRATION_KEY}'
+        description: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        severity: 'critical'
+        details:
+          service: '{{ .GroupLabels.service }}'
+          category: '{{ .GroupLabels.category }}'
+          runbook: '{{ range .Alerts }}{{ .Annotations.runbook_url }}{{ end }}'
+
+  # Security team alerts
+  - name: 'security-team'
+    email_configs:
+      - to: '${SECURITY_TEAM_EMAIL}'
+        subject: '[SECURITY ALERT] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          🔒 SECURITY ALERT 🔒
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          
+          🔗 Runbook: {{ .Annotations.runbook_url }}
+          📊 Security Dashboard: ${GRAFANA_BASE_URL}/d/auth-security/auth-service-security
+          
+          This alert requires immediate security team attention.
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '${SECURITY_SLACK_CHANNEL}'
+        title: '🔒 SECURITY ALERT: {{ .GroupLabels.service }}'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        color: 'danger'
+
+  # Compliance team alerts
+  - name: 'compliance-team'
+    email_configs:
+      - to: '${COMPLIANCE_TEAM_EMAIL}'
+        subject: '[COMPLIANCE VIOLATION] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          ⚖️ COMPLIANCE VIOLATION ⚖️
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          
+          🔗 Runbook: {{ .Annotations.runbook_url }}
+          📊 Compliance Dashboard: ${GRAFANA_BASE_URL}/d/auth-compliance/auth-service-compliance
+          
+          This violation may impact GDPR, HIPAA, or SOC2 compliance.
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
+
+  # Warning alerts - team notification
+  - name: 'warning-alerts'
+    email_configs:
+      - to: '${TEAM_EMAIL}'
+        subject: '[WARNING] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          ⚠️ WARNING ⚠️
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          Category: {{ .Labels.category }}
+          
+          🔗 Runbook: {{ .Annotations.runbook_url }}
+          📊 Dashboard: ${GRAFANA_BASE_URL}/d/auth-service/auth-service-overview
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '${WARNING_SLACK_CHANNEL}'
+        title: '⚠️ {{ .GroupLabels.service }} Warning'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+        color: 'warning'
+
+  # Database team alerts
+  - name: 'database-team'
+    email_configs:
+      - to: '${DATABASE_TEAM_EMAIL}'
+        subject: '[DATABASE] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          🗄️ DATABASE ALERT 🗄️
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          
+          🔗 Runbook: {{ .Annotations.runbook_url }}
+          📊 Database Dashboard: ${GRAFANA_BASE_URL}/d/auth-database/auth-service-database
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
+
+  # Performance team alerts
+  - name: 'performance-team'
+    email_configs:
+      - to: '${PERFORMANCE_TEAM_EMAIL}'
+        subject: '[PERFORMANCE] {{ .GroupLabels.service }}: {{ .GroupLabels.alertname }}'
+        body: |
+          🚀 PERFORMANCE ALERT 🚀
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          
+          🔗 Runbook: {{ .Annotations.runbook_url }}
+          📊 Performance Dashboard: ${GRAFANA_BASE_URL}/d/auth-performance/auth-service-performance
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          {{ end }}
