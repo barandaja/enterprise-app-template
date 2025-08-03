@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, TYPE_CHECKING
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status, Request
@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import re
 import secrets
 import hashlib
-from ..models.user import User
 from .config import settings
 from .database import get_db
 import structlog
+
+if TYPE_CHECKING:
+    from ..models.user import User
 
 logger = structlog.get_logger()
 
@@ -149,7 +151,7 @@ class SecurityService:
             return None
     
     @staticmethod
-    def generate_api_key() -> tuple[str, str]:
+    def generate_api_key() -> tuple[str, str, str]:
         """Generate API key and secret"""
         api_key = f"sk_{secrets.token_urlsafe(24)}"
         api_secret = secrets.token_urlsafe(32)
@@ -169,7 +171,7 @@ async def get_current_user(
     request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
-) -> User:
+) -> "User":
     """Get current authenticated user from JWT token"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -188,6 +190,7 @@ async def get_current_user(
         raise credentials_exception
     
     # Get user from database
+    from ..models.user import User
     user = await User.get_by_id(db, int(user_id))
     if user is None:
         raise credentials_exception
@@ -217,8 +220,8 @@ async def get_current_user(
 
 async def get_current_active_superuser(
     request: Request,
-    current_user: User = Depends(get_current_user),
-) -> User:
+    current_user: "User" = Depends(get_current_user),
+) -> "User":
     """Get current active superuser"""
     if not current_user.is_superuser:
         raise HTTPException(

@@ -96,8 +96,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     
     def __init__(self, app, requests_per_minute: int = None):
         super().__init__(app)
-        self.requests_per_minute = requests_per_minute or settings.RATE_LIMIT_PER_MINUTE
-        self.cache_service = get_cache_service()
+        self.requests_per_minute = requests_per_minute or settings.RATE_LIMIT_GLOBAL_PER_MINUTE
+        self._cache_service = None
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Skip rate limiting if disabled
@@ -114,12 +114,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         rate_limit_key = f"global_rate_limit:{client_ip}"
         
         try:
+            # Lazily initialize cache service
+            if self._cache_service is None:
+                self._cache_service = get_cache_service()
+            
             # Use Redis for distributed rate limiting
-            current_requests = await self.cache_service.increment(rate_limit_key)
+            current_requests = await self._cache_service.increment(rate_limit_key)
             
             if current_requests == 1:
                 # First request in window, set expiration
-                await self.cache_service.expire(rate_limit_key, 60)
+                await self._cache_service.expire(rate_limit_key, 60)
             
             if current_requests > self.requests_per_minute:
                 return JSONResponse(

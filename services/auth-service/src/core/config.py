@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field, validator, ValidationError
+from pydantic import Field, field_validator, ValidationError, ConfigDict, ValidationInfo
 from typing import List, Optional, Dict, Any
 import os
 import sys
@@ -68,10 +68,17 @@ class Settings(BaseSettings):
     REDIS_DECODE_RESPONSES: bool = False  # Keep as bytes for encryption
     
     # CORS settings - should be environment-specific
-    BACKEND_CORS_ORIGINS: List[str] = Field(
-        default_factory=list,
+    backend_cors_origins_str: str = Field(
+        default="",
         env="BACKEND_CORS_ORIGINS"
     )
+    
+    @property
+    def BACKEND_CORS_ORIGINS(self) -> List[str]:
+        """Return parsed CORS origins as a list"""
+        if not self.backend_cors_origins_str:
+            return []
+        return [origin.strip() for origin in self.backend_cors_origins_str.split(",") if origin.strip()]
     
     # Enterprise Rate Limiting Configuration
     RATE_LIMIT_ENABLED: bool = True
@@ -144,36 +151,31 @@ class Settings(BaseSettings):
         "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=()"
     })
     
-    @validator("SECRET_KEY", "ENCRYPTION_KEY")
-    def validate_keys(cls, v: str, field) -> str:
+    @field_validator("SECRET_KEY", "ENCRYPTION_KEY")
+    @classmethod
+    def validate_keys(cls, v: str, info: ValidationInfo) -> str:
         """Validate that security keys are strong enough"""
         if len(v) < 32:
-            raise ValueError(f"{field.name} must be at least 32 characters long")
+            raise ValueError(f"{info.field_name} must be at least 32 characters long")
         
         # Check for obvious bad values
         bad_values = ["your-secret-key", "change-me", "secret", "password", "12345"]
         if any(bad in v.lower() for bad in bad_values):
-            raise ValueError(f"{field.name} contains weak or default values")
+            raise ValueError(f"{info.field_name} contains weak or default values")
         
         return v
     
-    @validator("DATABASE_URL")
+    @field_validator("DATABASE_URL")
+    @classmethod
     def validate_database_url(cls, v: str) -> str:
         """Ensure database URL doesn't contain default credentials"""
         if "user:password@" in v or "postgres:postgres@" in v:
             raise ValueError("DATABASE_URL contains default credentials")
         return v
     
-    @validator("BACKEND_CORS_ORIGINS", pre=True)
-    def parse_cors_origins(cls, v: Any) -> List[str]:
-        """Parse CORS origins from comma-separated string or list"""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        elif isinstance(v, list):
-            return v
-        return []
     
-    @validator("ENVIRONMENT")
+    @field_validator("ENVIRONMENT")
+    @classmethod
     def validate_environment(cls, v: str) -> str:
         """Validate environment and adjust settings accordingly"""
         valid_envs = ["development", "staging", "production"]
@@ -181,16 +183,12 @@ class Settings(BaseSettings):
             raise ValueError(f"ENVIRONMENT must be one of: {valid_envs}")
         return v
     
-    class Config:
-        case_sensitive = True
-        env_file = ".env"
-        
-        # Additional validation
-        validate_assignment = True
-        use_enum_values = True
-        
-        # Schema for documentation
-        schema_extra = {
+    model_config = ConfigDict(
+        case_sensitive=True,
+        env_file=".env",
+        validate_assignment=True,
+        use_enum_values=True,
+        json_schema_extra={
             "example": {
                 "SECRET_KEY": secrets.token_urlsafe(32),
                 "ENCRYPTION_KEY": secrets.token_urlsafe(32),
@@ -198,6 +196,7 @@ class Settings(BaseSettings):
                 "REDIS_URL": "rediss://default:strongpass@redis.example.com:6380/0",
             }
         }
+    )
 
 
 def validate_required_settings(settings: Settings) -> None:

@@ -6,11 +6,11 @@ Provides decoupled communication between services through events.
 import asyncio
 from typing import Callable, Dict, List, Set, Awaitable
 from collections import defaultdict
-import logging
+import structlog
 
 from ..interfaces.event_interface import IEvent, IEventBus
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class InMemoryEventBus(IEventBus):

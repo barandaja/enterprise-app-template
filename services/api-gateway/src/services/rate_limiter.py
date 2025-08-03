@@ -10,7 +10,7 @@ from enum import Enum
 import structlog
 
 from ..core.config import get_settings
-from ..core.redis import redis_manager
+from ..core.redis import redis_manager, is_redis_initialized
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -106,62 +106,74 @@ class RateLimiterManager:
         redis_key = f"rate_limit:{limit_type.value}:{identifier}"
         
         try:
+            # Check if Redis is initialized
+            if not is_redis_initialized():
+                logger.warning("Rate limiting disabled - Redis not initialized", 
+                              identifier=identifier, limit_type=limit_type.value)
+                # Allow request if Redis is not available (fail open for availability)
+                return RateLimitResult(
+                    allowed=True,
+                    remaining=999999,
+                    reset_time=current_time + limit.window,
+                    limit_type=limit_type.value
+                )
+            
             # Use Redis sorted set for sliding window
-            async with redis_manager.get_client() as redis:
-                # Start pipeline for atomic operations
-                pipe = redis.pipeline()
+            client = await redis_manager.get_client()
+            # Start pipeline for atomic operations
+            pipe = client.pipeline()
+            
+            # Remove old entries outside the window
+            pipe.zremrangebyscore(redis_key, 0, window_start)
+            
+            # Count current requests in window
+            pipe.zcard(redis_key)
+            
+            # Execute pipeline
+            results = await pipe.execute()
+            current_requests = results[1]
+            
+            # Check if within limit
+            if current_requests < limit.requests:
+                # Add current request to the window
+                await client.zadd(redis_key, {str(current_time): current_time})
                 
-                # Remove old entries outside the window
-                pipe.zremrangebyscore(redis_key, 0, window_start)
+                # Set expiration for cleanup
+                await client.expire(redis_key, limit.window + 10)
                 
-                # Count current requests in window
-                pipe.zcard(redis_key)
+                remaining = limit.requests - current_requests - 1
+                reset_time = current_time + limit.window
                 
-                # Execute pipeline
-                results = await pipe.execute()
-                current_requests = results[1]
-                
-                # Check if within limit
-                if current_requests < limit.requests:
-                    # Add current request to the window
-                    await redis.zadd(redis_key, {str(current_time): current_time})
-                    
-                    # Set expiration for cleanup
-                    await redis.expire(redis_key, limit.window + 10)
-                    
-                    remaining = limit.requests - current_requests - 1
-                    reset_time = current_time + limit.window
-                    
-                    return RateLimitResult(
-                        allowed=True,
-                        remaining=max(0, remaining),
-                        reset_time=reset_time,
-                        limit_type=limit_type.value
+                return RateLimitResult(
+                    allowed=True,
+                    remaining=max(0, remaining),
+                    reset_time=reset_time,
+                    limit_type=limit_type.value
+                )
+            else:
+                # Check burst limit if configured
+                if limit.burst_requests and limit.burst_window:
+                    burst_result = await self._check_burst_limit(
+                        identifier, limit_type, limit, current_time
                     )
+                    if burst_result.allowed:
+                        return burst_result
+                
+                # Rate limit exceeded
+                oldest_request = await client.zrange(redis_key, 0, 0, withscores=True)
+                if oldest_request:
+                    oldest_time = oldest_request[0][1]
+                    retry_after = int(oldest_time + limit.window - current_time)
                 else:
-                    # Check burst limit if configured
-                    if limit.burst_requests and limit.burst_window:
-                        burst_result = await self._check_burst_limit(
-                            identifier, limit_type, limit, current_time
-                        )
-                        if burst_result.allowed:
-                            return burst_result
-                    
-                    # Rate limit exceeded
-                    oldest_request = await redis.zrange(redis_key, 0, 0, withscores=True)
-                    if oldest_request:
-                        oldest_time = oldest_request[0][1]
-                        retry_after = int(oldest_time + limit.window - current_time)
-                    else:
-                        retry_after = limit.window
-                    
-                    return RateLimitResult(
-                        allowed=False,
-                        remaining=0,
-                        reset_time=current_time + limit.window,
-                        retry_after=max(1, retry_after),
-                        limit_type=limit_type.value
-                    )
+                    retry_after = limit.window
+                
+                return RateLimitResult(
+                    allowed=False,
+                    remaining=0,
+                    reset_time=current_time + limit.window,
+                    retry_after=max(1, retry_after),
+                    limit_type=limit_type.value
+                )
         
         except Exception as e:
             logger.error(
@@ -193,49 +205,58 @@ class RateLimiterManager:
         burst_redis_key = f"burst_rate_limit:{limit_type.value}:{identifier}"
         
         try:
-            async with redis_manager.get_client() as redis:
-                # Remove old burst entries
-                await redis.zremrangebyscore(burst_redis_key, 0, burst_window_start)
+            if not is_redis_initialized():
+                logger.warning("Burst rate limiting disabled - Redis not initialized")
+                return RateLimitResult(
+                    allowed=True,
+                    remaining=limit.burst_requests - 1,
+                    reset_time=current_time + limit.burst_window,
+                    limit_type=f"{limit_type.value}_burst"
+                )
+            
+            client = await redis_manager.get_client()
+            # Remove old burst entries
+            await client.zremrangebyscore(burst_redis_key, 0, burst_window_start)
+            
+            # Count current burst requests
+            burst_requests = await client.zcard(burst_redis_key)
+            
+            if burst_requests < limit.burst_requests:
+                # Allow burst request
+                await client.zadd(burst_redis_key, {str(current_time): current_time})
+                await client.expire(burst_redis_key, limit.burst_window + 10)
                 
-                # Count current burst requests
-                burst_requests = await redis.zcard(burst_redis_key)
+                remaining = limit.burst_requests - burst_requests - 1
                 
-                if burst_requests < limit.burst_requests:
-                    # Allow burst request
-                    await redis.zadd(burst_redis_key, {str(current_time): current_time})
-                    await redis.expire(burst_redis_key, limit.burst_window + 10)
-                    
-                    remaining = limit.burst_requests - burst_requests - 1
-                    
-                    logger.info(
-                        "Burst rate limit allowed",
-                        identifier=identifier,
-                        limit_type=limit_type.value,
-                        remaining=remaining
-                    )
-                    
-                    return RateLimitResult(
-                        allowed=True,
-                        remaining=max(0, remaining),
-                        reset_time=current_time + limit.burst_window,
-                        limit_type=f"{limit_type.value}_burst"
-                    )
+                logger.info(
+                    "Burst rate limit allowed",
+                    identifier=identifier,
+                    limit_type=limit_type.value,
+                    remaining=remaining
+                )
+                
+                return RateLimitResult(
+                    allowed=True,
+                    remaining=max(0, remaining),
+                    reset_time=current_time + limit.burst_window,
+                    limit_type=f"{limit_type.value}_burst"
+                )
+            else:
+                # Burst limit also exceeded
+                oldest_burst = await client.zrange(burst_redis_key, 0, 0, withscores=True)
+                if oldest_burst:
+                    oldest_time = oldest_burst[0][1]
+                    retry_after = int(oldest_time + limit.burst_window - current_time)
                 else:
-                    # Burst limit also exceeded
-                    oldest_burst = await redis.zrange(burst_redis_key, 0, 0, withscores=True)
-                    if oldest_burst:
-                        oldest_time = oldest_burst[0][1]
-                        retry_after = int(oldest_time + limit.burst_window - current_time)
-                    else:
-                        retry_after = limit.burst_window
-                    
-                    return RateLimitResult(
-                        allowed=False,
-                        remaining=0,
-                        reset_time=current_time + limit.burst_window,
-                        retry_after=max(1, retry_after),
-                        limit_type=f"{limit_type.value}_burst"
-                    )
+                    retry_after = limit.burst_window
+                
+                return RateLimitResult(
+                    allowed=False,
+                    remaining=0,
+                    reset_time=current_time + limit.burst_window,
+                    retry_after=max(1, retry_after),
+                    limit_type=f"{limit_type.value}_burst"
+                )
         
         except Exception as e:
             logger.error(

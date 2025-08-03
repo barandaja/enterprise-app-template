@@ -13,7 +13,6 @@ from ..core.config import get_settings
 from ..core.redis import redis_manager
 
 logger = structlog.get_logger()
-settings = get_settings()
 
 
 class ServiceStatus(Enum):
@@ -97,6 +96,9 @@ class ServiceRegistry:
     async def _register_backend_services(self):
         """Register known backend services using Kubernetes DNS and Istio conventions."""
         
+        # Get settings dynamically
+        settings = get_settings()
+        
         # Use the new service registry builder from settings
         service_registry = settings.build_service_registry()
         
@@ -173,6 +175,7 @@ class ServiceRegistry:
             
             # Generate URL if not provided
             if not service_url:
+                settings = get_settings()
                 service_url = settings.get_k8s_service_url(f"{service_name}-service", port)
             
             # Create service endpoint
@@ -303,6 +306,7 @@ class ServiceRegistry:
                 health.last_check = time.time()
                 
                 # Cache healthy status in Redis
+                settings = get_settings()
                 await redis_manager.set_json(
                     f"service_health:{service_name}",
                     {
@@ -337,6 +341,7 @@ class ServiceRegistry:
             health.last_check = time.time()
             
             # Cache unhealthy status in Redis
+            settings = get_settings()
             await redis_manager.set_json(
                 f"service_health:{service_name}",
                 {
@@ -380,6 +385,7 @@ class ServiceRegistry:
         """Background task for continuous health monitoring."""
         while True:
             try:
+                settings = get_settings()
                 await asyncio.sleep(settings.service_health_check_interval)
                 await self.health_check_all_services()
                 

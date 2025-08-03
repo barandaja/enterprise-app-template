@@ -7,8 +7,7 @@ import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 import httpx
-import jwt
-from jose import JWTError, jwt as jose_jwt
+from jose import JWTError, jwt
 import structlog
 
 from ..core.config import get_settings
@@ -159,7 +158,7 @@ class AuthenticationService:
             key = self._jwt_public_key or self._jwt_secret_key
             algorithm = "RS256" if self._jwt_public_key else "HS256"
             
-            payload = jose_jwt.decode(
+            payload = jwt.decode(
                 token,
                 key,
                 algorithms=[algorithm]

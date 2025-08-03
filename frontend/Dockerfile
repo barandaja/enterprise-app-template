@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for React Frontend
-FROM node:18-alpine as base
+FROM node:20-alpine as base
 
 # Set working directory
 WORKDIR /app
@@ -9,13 +9,13 @@ COPY package*.json ./
 RUN npm ci --only=production && npm cache clean --force
 
 # Development stage
-FROM node:18-alpine as development
+FROM node:20-alpine as development
 
 WORKDIR /app
 
 # Install all dependencies including dev dependencies
 COPY package*.json ./
-RUN npm ci && npm cache clean --force
+RUN npm install && npm cache clean --force
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \

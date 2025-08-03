@@ -46,13 +46,16 @@ services:
       dockerfile: Dockerfile
       target: development
     container_name: enterprise_auth_service
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://enterprise_user:enterprise_pass@postgres:5432/auth_db
+      # Override specific values for containerized environment
+      - DATABASE_URL=postgresql+asyncpg://enterprise_user:iou5ko4lJVFY9BV0hDJfotLSj@postgres:5432/auth_db
       - REDIS_URL=redis://redis:6379/0
+      - REDIS_SSL=false
       - JWT_SECRET_KEY=dev_jwt_secret_key_change_in_production
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
-      - CORS_ORIGINS=http://localhost:5173,http://localhost:3000
     ports:
       - "8001:8000"
     volumes:
@@ -80,7 +83,7 @@ services:
       target: development
     container_name: enterprise_user_service
     environment:
-      - DATABASE_URL=postgresql://enterprise_user:enterprise_pass@postgres:5432/user_db
+      - DATABASE_URL=postgresql+asyncpg://enterprise_user:iou5ko4lJVFY9BV0hDJfotLSj@postgres:5432/user_db
       - REDIS_URL=redis://redis:6379/1
       - AUTH_SERVICE_URL=http://auth-service:8000
       - ENVIRONMENT=development
@@ -91,6 +94,7 @@ services:
     volumes:
       - ./services/user-service/src:/app/src:ro
       - ./services/user-service/alembic:/app/alembic:ro
+      - ./services/user-service/alembic.ini:/app/alembic.ini:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -114,8 +118,8 @@ services:
       target: development
     container_name: enterprise_api_gateway
     environment:
-      - DATABASE_URL=postgresql://enterprise_user:enterprise_pass@postgres:5432/gateway_db
-      - REDIS_URL=redis://redis:6379/2
+      - DATABASE_URL=postgresql+asyncpg://enterprise_user:iou5ko4lJVFY9BV0hDJfotLSj@postgres:5432/gateway_db
+      - REDIS_URL=redis://:Vzje9bdeyRdUBgDbXZlNHtInm@redis:6379/2
       - AUTH_SERVICE_URL=http://auth-service:8000
       - USER_SERVICE_URL=http://user-service:8000
       - ENVIRONMENT=development
@@ -128,6 +132,7 @@ services:
     volumes:
       - ./services/api-gateway/src:/app/src:ro
       - ./services/api-gateway/alembic:/app/alembic:ro
+      - ./services/api-gateway/alembic.ini:/app/alembic.ini:ro
     depends_on:
       postgres:
         condition: service_healthy

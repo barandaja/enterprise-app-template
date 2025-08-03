@@ -2,7 +2,9 @@
 Redis configuration and connection management for caching and session storage.
 Implements connection pooling and health checks.
 """
+import asyncio
 import json
+import time
 from typing import Any, Optional, Union
 import redis.asyncio as redis
 from redis.asyncio import ConnectionPool
@@ -35,7 +37,8 @@ class RedisManager:
             if settings.REDIS_PASSWORD:
                 redis_kwargs["password"] = settings.REDIS_PASSWORD
             
-            if settings.REDIS_SSL:
+            # Only add SSL parameters if SSL is enabled and we have a secure URL
+            if settings.REDIS_SSL and settings.REDIS_URL.startswith(('rediss://', 'redis+ssl://')):
                 redis_kwargs["ssl"] = True
                 redis_kwargs["ssl_cert_reqs"] = None
             

@@ -7,7 +7,9 @@ import os
 from typing import Callable, Dict, List, Awaitable, Optional
 from datetime import datetime
 from uuid import UUID, uuid4
-import logging
+import structlog
+
+logger = structlog.get_logger()
 
 from ..interfaces.event_interface import IEvent, IEventBus
 
@@ -33,8 +35,6 @@ except ImportError:
     def create_service_token(service_name, roles):
         # Return a mock token
         return f"mock_token_{service_name}"
-
-logger = logging.getLogger(__name__)
 
 
 class DomainEventAdapter(DomainEvent):

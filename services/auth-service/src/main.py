@@ -110,7 +110,7 @@ app.add_middleware(PerformanceMonitoringMiddleware)
 app.add_middleware(ErrorHandlingMiddleware)
 
 # Rate limiting
-app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.RATE_LIMIT_PER_MINUTE)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.RATE_LIMIT_GLOBAL_PER_MINUTE)
 
 # Request tracking (innermost)
 app.add_middleware(RequestTrackingMiddleware)

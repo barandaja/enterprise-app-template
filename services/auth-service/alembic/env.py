@@ -52,7 +52,10 @@ def get_url() -> str:
     
     # Convert asyncpg URL to psycopg2 URL for sync operations
     if url and url.startswith("postgresql+asyncpg://"):
-        url = url.replace("postgresql+asyncpg://", "postgresql://")
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    elif url and url.startswith("postgresql://"):
+        # Ensure we use psycopg2 explicitly for sync operations
+        url = url.replace("postgresql://", "postgresql+psycopg2://")
     
     return url
 
@@ -221,8 +224,12 @@ def run_migrations_online() -> None:
         asyncio.run(run_async_migrations())
     else:
         # Run sync migrations (fallback)
+        # Ensure we use the correct URL with psycopg2 driver
+        config_dict = config.get_section(config.config_ini_section, {})
+        config_dict["sqlalchemy.url"] = get_url()
+        
         connectable = engine_from_config(
-            config.get_section(config.config_ini_section, {}),
+            config_dict,
             prefix="sqlalchemy.",
             poolclass=pool.NullPool,
         )

@@ -1,7 +1,7 @@
 """Add HIPAA and SOC2 compliance tables
 
 Revision ID: 004_add_hipaa_soc2_compliance
-Revises: 003_add_email_hash_index
+Revises: 003
 Create Date: 2025-08-01 12:00:00.000000
 
 """
@@ -11,13 +11,97 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic
 revision = '004_add_hipaa_soc2_compliance'
-down_revision = '003_add_email_hash_index'
+down_revision = '003'
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
     """Add HIPAA and SOC2 compliance tables."""
+    
+    # Create enum types for PostgreSQL (with checkfirst=True for idempotency)
+    phicategory_enum = sa.Enum(
+        'demographic', 'financial', 'medical_record_number', 'health_plan_number',
+        'biometric', 'photo', 'contact', 'device_identifier', 'web_url',
+        'ip_address', 'medical_data', 'insurance', 'other',
+        name='phicategory'
+    )
+    phicategory_enum.create(op.get_bind(), checkfirst=True)
+    
+    accesspurpose_enum = sa.Enum(
+        'treatment', 'payment', 'operations', 'research', 'public_health',
+        'emergency', 'legal', 'audit', 'administrative', 'minimum_necessary',
+        name='accesspurpose'
+    )
+    accesspurpose_enum.create(op.get_bind(), checkfirst=True)
+    
+    baaagreementstatus_enum = sa.Enum(
+        'active', 'pending', 'expired', 'terminated', 'suspended', 'under_review',
+        name='baaagreementstatus'
+    )
+    baaagreementstatus_enum.create(op.get_bind(), checkfirst=True)
+    
+    emergencyaccesstype_enum = sa.Enum(
+        'break_glass', 'life_threatening', 'clinical_emergency', 'system_outage',
+        'disaster_recovery', 'security_incident',
+        name='emergencyaccesstype'
+    )
+    emergencyaccesstype_enum.create(op.get_bind(), checkfirst=True)
+    
+    incidentcategory_enum = sa.Enum(
+        'security_breach', 'unauthorized_access', 'system_outage', 'data_loss',
+        'malware', 'phishing', 'policy_violation', 'vulnerability',
+        'performance', 'compliance', 'other',
+        name='incidentcategory'
+    )
+    incidentcategory_enum.create(op.get_bind(), checkfirst=True)
+    
+    incidentseverity_enum = sa.Enum(
+        'low', 'medium', 'high', 'critical',
+        name='incidentseverity'
+    )
+    incidentseverity_enum.create(op.get_bind(), checkfirst=True)
+    
+    incidentstatus_enum = sa.Enum(
+        'open', 'in_progress', 'escalated', 'resolved', 'closed', 'reopened',
+        name='incidentstatus'
+    )
+    incidentstatus_enum.create(op.get_bind(), checkfirst=True)
+    
+    anomalytype_enum = sa.Enum(
+        'login_anomaly', 'access_pattern', 'data_volume', 'time_pattern',
+        'location_anomaly', 'permission_escalation', 'failed_attempts',
+        'resource_usage', 'network_traffic', 'system_behavior',
+        name='anomalytype'
+    )
+    anomalytype_enum.create(op.get_bind(), checkfirst=True)
+    
+    vendoraccesslevel_enum = sa.Enum(
+        'no_access', 'limited', 'standard', 'elevated', 'full_admin',
+        name='vendoraccesslevel'
+    )
+    vendoraccesslevel_enum.create(op.get_bind(), checkfirst=True)
+    
+    changetype_enum = sa.Enum(
+        'standard', 'normal', 'emergency', 'configuration', 'access_control',
+        'security_policy', 'system_update', 'user_management', 'role_permission',
+        'data_schema',
+        name='changetype'
+    )
+    changetype_enum.create(op.get_bind(), checkfirst=True)
+    
+    changestatus_enum = sa.Enum(
+        'requested', 'approved', 'rejected', 'in_progress', 'completed',
+        'failed', 'rolled_back', 'under_review',
+        name='changestatus'
+    )
+    changestatus_enum.create(op.get_bind(), checkfirst=True)
+    
+    trustservicecriteria_enum = sa.Enum(
+        'security', 'availability', 'processing_integrity', 'confidentiality', 'privacy',
+        name='trustservicecriteria'
+    )
+    trustservicecriteria_enum.create(op.get_bind(), checkfirst=True)
     
     # Create HIPAA compliance tables
     
@@ -35,12 +119,7 @@ def upgrade() -> None:
         sa.Column('session_id', sa.String(128), nullable=True, index=True),
         
         # PHI details
-        sa.Column('phi_category', sa.Enum(
-            'demographic', 'financial', 'medical_record_number', 'health_plan_number',
-            'biometric', 'photo', 'contact', 'device_identifier', 'web_url',
-            'ip_address', 'medical_data', 'insurance', 'other',
-            name='phicategory'
-        ), nullable=False, index=True),
+        sa.Column('phi_category', phicategory_enum, nullable=False, index=True),
         sa.Column('resource_type', sa.String(100), nullable=False, index=True),
         sa.Column('resource_id', sa.String(100), nullable=False, index=True),
         sa.Column('resource_description', sa.Text(), nullable=True),
@@ -48,11 +127,7 @@ def upgrade() -> None:
         # Access details
         sa.Column('access_timestamp', sa.DateTime(timezone=True), 
                  server_default=sa.text('now()'), nullable=False, index=True),
-        sa.Column('access_purpose', sa.Enum(
-            'treatment', 'payment', 'operations', 'research', 'public_health',
-            'emergency', 'legal', 'audit', 'administrative', 'minimum_necessary',
-            name='accesspurpose'
-        ), nullable=False, index=True),
+        sa.Column('access_purpose', accesspurpose_enum, nullable=False, index=True),
         sa.Column('access_method', sa.String(50), nullable=False),
         sa.Column('action_performed', sa.String(50), nullable=False, index=True),
         
@@ -129,10 +204,7 @@ def upgrade() -> None:
         sa.Column('effective_date', sa.DateTime(timezone=True), nullable=False, index=True),
         sa.Column('expiration_date', sa.DateTime(timezone=True), nullable=False, index=True),
         sa.Column('termination_date', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('status', sa.Enum(
-            'active', 'pending', 'expired', 'terminated', 'suspended', 'under_review',
-            name='baaagreementstatus'
-        ), nullable=False, default='active', index=True),
+        sa.Column('status', baaagreementstatus_enum, nullable=False, default='active', index=True),
         
         # Compliance requirements
         sa.Column('security_requirements', postgresql.JSON(), nullable=True),
@@ -178,11 +250,7 @@ def upgrade() -> None:
         sa.Column('session_id', sa.String(128), nullable=True, index=True),
         
         # Emergency details
-        sa.Column('emergency_type', sa.Enum(
-            'break_glass', 'life_threatening', 'clinical_emergency', 'system_outage',
-            'disaster_recovery', 'security_incident',
-            name='emergencyaccesstype'
-        ), nullable=False, index=True),
+        sa.Column('emergency_type', emergencyaccesstype_enum, nullable=False, index=True),
         sa.Column('emergency_justification', sa.Text(), nullable=False),
         sa.Column('emergency_start_time', sa.DateTime(timezone=True), 
                  server_default=sa.text('now()'), nullable=False, index=True),
@@ -299,16 +367,8 @@ def upgrade() -> None:
         sa.Column('incident_number', sa.String(50), nullable=False, unique=True, index=True),
         
         # Incident classification
-        sa.Column('category', sa.Enum(
-            'security_breach', 'unauthorized_access', 'system_outage', 'data_loss',
-            'malware', 'phishing', 'policy_violation', 'vulnerability',
-            'performance', 'compliance', 'other',
-            name='incidentcategory'
-        ), nullable=False, index=True),
-        sa.Column('severity', sa.Enum(
-            'low', 'medium', 'high', 'critical',
-            name='incidentseverity'
-        ), nullable=False, index=True),
+        sa.Column('category', incidentcategory_enum, nullable=False, index=True),
+        sa.Column('severity', incidentseverity_enum, nullable=False, index=True),
         sa.Column('trust_criteria_affected', postgresql.JSON(), nullable=False),
         
         # Incident details
@@ -324,10 +384,7 @@ def upgrade() -> None:
         sa.Column('closed_at', sa.DateTime(timezone=True), nullable=True),
         
         # Status tracking
-        sa.Column('status', sa.Enum(
-            'open', 'in_progress', 'escalated', 'resolved', 'closed', 'reopened',
-            name='incidentstatus'
-        ), nullable=False, default='open', index=True),
+        sa.Column('status', incidentstatus_enum, nullable=False, default='open', index=True),
         
         # Impact assessment
         sa.Column('systems_affected', postgresql.JSON(), nullable=True),
@@ -375,12 +432,7 @@ def upgrade() -> None:
         
         # Anomaly identification
         sa.Column('anomaly_id', sa.String(128), nullable=False, unique=True, index=True),
-        sa.Column('anomaly_type', sa.Enum(
-            'login_anomaly', 'access_pattern', 'data_volume', 'time_pattern',
-            'location_anomaly', 'permission_escalation', 'failed_attempts',
-            'resource_usage', 'network_traffic', 'system_behavior',
-            name='anomalytype'
-        ), nullable=False, index=True),
+        sa.Column('anomaly_type', anomalytype_enum, nullable=False, index=True),
         
         # Detection details
         sa.Column('detected_at', sa.DateTime(timezone=True), 
@@ -443,10 +495,7 @@ def upgrade() -> None:
         sa.Column('vendor_contact_email', sa.Text(), nullable=False),  # Encrypted
         
         # Access details
-        sa.Column('access_level', sa.Enum(
-            'no_access', 'limited', 'standard', 'elevated', 'full_admin',
-            name='vendoraccesslevel'
-        ), nullable=False, index=True),
+        sa.Column('access_level', vendoraccesslevel_enum, nullable=False, index=True),
         sa.Column('systems_accessed', postgresql.JSON(), nullable=False),
         sa.Column('access_purpose', sa.Text(), nullable=False),
         sa.Column('business_justification', sa.Text(), nullable=False),
@@ -506,12 +555,7 @@ def upgrade() -> None:
         sa.Column('change_number', sa.String(50), nullable=False, unique=True, index=True),
         
         # Change classification
-        sa.Column('change_type', sa.Enum(
-            'standard', 'normal', 'emergency', 'configuration', 'access_control',
-            'security_policy', 'system_update', 'user_management', 'role_permission',
-            'data_schema',
-            name='changetype'
-        ), nullable=False, index=True),
+        sa.Column('change_type', changetype_enum, nullable=False, index=True),
         sa.Column('risk_level', sa.String(20), nullable=False, default='medium'),
         
         # Change details
@@ -530,11 +574,7 @@ def upgrade() -> None:
         sa.Column('completion_date', sa.DateTime(timezone=True), nullable=True),
         
         # Status tracking
-        sa.Column('status', sa.Enum(
-            'requested', 'approved', 'rejected', 'in_progress', 'completed',
-            'failed', 'rolled_back', 'under_review',
-            name='changestatus'
-        ), nullable=False, default='requested', index=True),
+        sa.Column('status', changestatus_enum, nullable=False, default='requested', index=True),
         
         # Personnel
         sa.Column('requested_by_user_id', sa.Integer(), sa.ForeignKey('user.id'), nullable=False),
@@ -584,10 +624,7 @@ def upgrade() -> None:
         sa.Column('control_number', sa.String(50), nullable=False, unique=True, index=True),
         
         # Control classification
-        sa.Column('trust_criteria', sa.Enum(
-            'security', 'availability', 'processing_integrity', 'confidentiality', 'privacy',
-            name='trustservicecriteria'
-        ), nullable=False, index=True),
+        sa.Column('trust_criteria', trustservicecriteria_enum, nullable=False, index=True),
         sa.Column('control_category', sa.String(100), nullable=False, index=True),
         
         # Control details
@@ -705,16 +742,16 @@ def downgrade() -> None:
     op.drop_index('idx_phi_access_user_timestamp', table_name='phi_access_log')
     op.drop_table('phi_access_log')
     
-    # Drop enum types
-    op.execute('DROP TYPE IF EXISTS trustservicecriteria')
-    op.execute('DROP TYPE IF EXISTS changestatus')
-    op.execute('DROP TYPE IF EXISTS changetype')
-    op.execute('DROP TYPE IF EXISTS vendoraccesslevel')
-    op.execute('DROP TYPE IF EXISTS anomalytype')
-    op.execute('DROP TYPE IF EXISTS incidentstatus')
-    op.execute('DROP TYPE IF EXISTS incidentseverity')
-    op.execute('DROP TYPE IF EXISTS incidentcategory')
-    op.execute('DROP TYPE IF EXISTS emergencyaccesstype')
-    op.execute('DROP TYPE IF EXISTS baaagreementstatus')
-    op.execute('DROP TYPE IF EXISTS accesspurpose')
-    op.execute('DROP TYPE IF EXISTS phicategory')
+    # Drop enum types (with checkfirst=True for idempotency)
+    sa.Enum(name='trustservicecriteria').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='changestatus').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='changetype').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='vendoraccesslevel').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='anomalytype').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='incidentstatus').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='incidentseverity').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='incidentcategory').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='emergencyaccesstype').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='baaagreementstatus').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='accesspurpose').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='phicategory').drop(op.get_bind(), checkfirst=True)

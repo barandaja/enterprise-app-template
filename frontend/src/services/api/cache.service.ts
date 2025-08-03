@@ -26,4 +26,1139 @@ import type {
 
 /**
  * Cache storage types
- */\nexport enum CacheStorageType {\n  MEMORY = 'memory',\n  LOCAL_STORAGE = 'localStorage',\n  SESSION_STORAGE = 'sessionStorage',\n  INDEXED_DB = 'indexedDB',\n}\n\n/**\n * Cache entry metadata\n */\nexport interface CacheEntry<T = unknown> {\n  readonly key: string;\n  readonly data: T;\n  readonly timestamp: number;\n  readonly ttl: number;\n  readonly tags: string[];\n  readonly version: number;\n  readonly metadata: {\n    readonly requestId?: string;\n    readonly etag?: string;\n    readonly lastModified?: string;\n    readonly contentType?: string;\n    readonly size: number;\n  };\n  readonly dependencies: string[];\n}\n\n/**\n * Cache statistics\n */\nexport interface CacheStats {\n  readonly totalEntries: number;\n  readonly totalSize: number;\n  readonly hitCount: number;\n  readonly missCount: number;\n  readonly evictionCount: number;\n  readonly hitRate: number;\n  readonly averageResponseTime: number;\n  readonly memoryUsage: {\n    readonly used: number;\n    readonly limit: number;\n    readonly percentage: number;\n  };\n  readonly storageBreakdown: Record<CacheStorageType, {\n    readonly entries: number;\n    readonly size: number;\n  }>;\n}\n\n/**\n * Cache invalidation strategies\n */\nexport enum InvalidationStrategy {\n  TTL = 'ttl',           // Time-based expiration\n  LRU = 'lru',           // Least Recently Used\n  LFU = 'lfu',           // Least Frequently Used\n  FIFO = 'fifo',         // First In, First Out\n  TAG_BASED = 'tag',     // Tag-based invalidation\n  DEPENDENCY = 'dep',    // Dependency-based invalidation\n}\n\n/**\n * Background sync operation\n */\nexport interface SyncOperation {\n  readonly id: string;\n  readonly key: string;\n  readonly operation: 'fetch' | 'invalidate' | 'update';\n  readonly url: string;\n  readonly method: string;\n  readonly data?: unknown;\n  readonly priority: 'low' | 'normal' | 'high';\n  readonly scheduledAt: number;\n  readonly maxRetries: number;\n  readonly retryCount: number;\n}\n\n/**\n * Cache configuration\n */\nexport interface CacheServiceConfig {\n  readonly maxMemorySize: number; // bytes\n  readonly maxLocalStorageSize: number; // bytes\n  readonly defaultTTL: number; // milliseconds\n  readonly cleanupInterval: number; // milliseconds\n  readonly invalidationStrategy: InvalidationStrategy;\n  readonly enableBackgroundSync: boolean;\n  readonly enableCrossTabSync: boolean;\n  readonly enableCompression: boolean;\n  readonly enableEncryption: boolean;\n  readonly syncInterval: number; // milliseconds\n  readonly maxSyncQueueSize: number;\n  readonly enableAnalytics: boolean;\n}\n\n/**\n * Default cache configuration\n */\nconst DEFAULT_CACHE_CONFIG: CacheServiceConfig = {\n  maxMemorySize: 50 * 1024 * 1024, // 50MB\n  maxLocalStorageSize: 10 * 1024 * 1024, // 10MB\n  defaultTTL: 5 * 60 * 1000, // 5 minutes\n  cleanupInterval: 60 * 1000, // 1 minute\n  invalidationStrategy: InvalidationStrategy.LRU,\n  enableBackgroundSync: true,\n  enableCrossTabSync: true,\n  enableCompression: true,\n  enableEncryption: false,\n  syncInterval: 30 * 1000, // 30 seconds\n  maxSyncQueueSize: 100,\n  enableAnalytics: true,\n};\n\n// =============================================================================\n// Storage Adapters\n// =============================================================================\n\n/**\n * Base storage adapter interface\n */\ninterface StorageAdapter {\n  get<T>(key: string): Promise<CacheEntry<T> | null>;\n  set<T>(key: string, entry: CacheEntry<T>): Promise<void>;\n  delete(key: string): Promise<boolean>;\n  clear(): Promise<void>;\n  keys(): Promise<string[]>;\n  size(): Promise<number>;\n}\n\n/**\n * Memory storage adapter\n */\nclass MemoryStorageAdapter implements StorageAdapter {\n  private store = new Map<string, CacheEntry>();\n  private accessTimes = new Map<string, number>();\n  private accessCounts = new Map<string, number>();\n\n  async get<T>(key: string): Promise<CacheEntry<T> | null> {\n    const entry = this.store.get(key) as CacheEntry<T> | undefined;\n    if (entry) {\n      // Update access statistics\n      this.accessTimes.set(key, Date.now());\n      this.accessCounts.set(key, (this.accessCounts.get(key) || 0) + 1);\n      return entry;\n    }\n    return null;\n  }\n\n  async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {\n    this.store.set(key, entry);\n    this.accessTimes.set(key, Date.now());\n    this.accessCounts.set(key, 1);\n  }\n\n  async delete(key: string): Promise<boolean> {\n    const deleted = this.store.delete(key);\n    this.accessTimes.delete(key);\n    this.accessCounts.delete(key);\n    return deleted;\n  }\n\n  async clear(): Promise<void> {\n    this.store.clear();\n    this.accessTimes.clear();\n    this.accessCounts.clear();\n  }\n\n  async keys(): Promise<string[]> {\n    return Array.from(this.store.keys());\n  }\n\n  async size(): Promise<number> {\n    return Array.from(this.store.values())\n      .reduce((total, entry) => total + entry.metadata.size, 0);\n  }\n\n  getAccessTime(key: string): number {\n    return this.accessTimes.get(key) || 0;\n  }\n\n  getAccessCount(key: string): number {\n    return this.accessCounts.get(key) || 0;\n  }\n}\n\n/**\n * Local storage adapter with compression\n */\nclass LocalStorageAdapter implements StorageAdapter {\n  private prefix = 'api_cache_';\n  private compressionEnabled: boolean;\n\n  constructor(compressionEnabled = true) {\n    this.compressionEnabled = compressionEnabled;\n  }\n\n  async get<T>(key: string): Promise<CacheEntry<T> | null> {\n    try {\n      const item = localStorage.getItem(this.prefix + key);\n      if (!item) return null;\n\n      const data = this.compressionEnabled ? this.decompress(item) : item;\n      return JSON.parse(data);\n    } catch (error) {\n      console.error('LocalStorage get error:', error);\n      return null;\n    }\n  }\n\n  async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {\n    try {\n      const serialized = JSON.stringify(entry);\n      const data = this.compressionEnabled ? this.compress(serialized) : serialized;\n      localStorage.setItem(this.prefix + key, data);\n    } catch (error) {\n      console.error('LocalStorage set error:', error);\n      // Handle quota exceeded errors\n      if (error instanceof DOMException && error.name === 'QuotaExceededError') {\n        await this.cleanup();\n        // Retry once after cleanup\n        try {\n          const serialized = JSON.stringify(entry);\n          const data = this.compressionEnabled ? this.compress(serialized) : serialized;\n          localStorage.setItem(this.prefix + key, data);\n        } catch (retryError) {\n          console.error('LocalStorage retry failed:', retryError);\n        }\n      }\n    }\n  }\n\n  async delete(key: string): Promise<boolean> {\n    try {\n      const fullKey = this.prefix + key;\n      const existed = localStorage.getItem(fullKey) !== null;\n      localStorage.removeItem(fullKey);\n      return existed;\n    } catch (error) {\n      console.error('LocalStorage delete error:', error);\n      return false;\n    }\n  }\n\n  async clear(): Promise<void> {\n    try {\n      const keysToDelete = [];\n      for (let i = 0; i < localStorage.length; i++) {\n        const key = localStorage.key(i);\n        if (key?.startsWith(this.prefix)) {\n          keysToDelete.push(key);\n        }\n      }\n      keysToDelete.forEach(key => localStorage.removeItem(key));\n    } catch (error) {\n      console.error('LocalStorage clear error:', error);\n    }\n  }\n\n  async keys(): Promise<string[]> {\n    const keys = [];\n    try {\n      for (let i = 0; i < localStorage.length; i++) {\n        const key = localStorage.key(i);\n        if (key?.startsWith(this.prefix)) {\n          keys.push(key.substring(this.prefix.length));\n        }\n      }\n    } catch (error) {\n      console.error('LocalStorage keys error:', error);\n    }\n    return keys;\n  }\n\n  async size(): Promise<number> {\n    let totalSize = 0;\n    try {\n      for (let i = 0; i < localStorage.length; i++) {\n        const key = localStorage.key(i);\n        if (key?.startsWith(this.prefix)) {\n          const value = localStorage.getItem(key);\n          if (value) {\n            totalSize += new Blob([value]).size;\n          }\n        }\n      }\n    } catch (error) {\n      console.error('LocalStorage size error:', error);\n    }\n    return totalSize;\n  }\n\n  private compress(data: string): string {\n    // Simple compression using LZ-string or similar\n    // For now, return as-is (would implement actual compression)\n    return data;\n  }\n\n  private decompress(data: string): string {\n    // Simple decompression\n    // For now, return as-is (would implement actual decompression)\n    return data;\n  }\n\n  private async cleanup(): Promise<void> {\n    // Remove expired entries to free up space\n    const now = Date.now();\n    const keysToDelete = [];\n\n    for (let i = 0; i < localStorage.length; i++) {\n      const key = localStorage.key(i);\n      if (key?.startsWith(this.prefix)) {\n        try {\n          const item = localStorage.getItem(key);\n          if (item) {\n            const entry: CacheEntry = JSON.parse(item);\n            if (now - entry.timestamp > entry.ttl) {\n              keysToDelete.push(key);\n            }\n          }\n        } catch (error) {\n          // If we can't parse it, remove it\n          keysToDelete.push(key);\n        }\n      }\n    }\n\n    keysToDelete.forEach(key => localStorage.removeItem(key));\n  }\n}\n\n// =============================================================================\n// Multi-Level Cache Manager\n// =============================================================================\n\n/**\n * Multi-level cache with intelligent storage selection\n */\nclass MultiLevelCache {\n  private memoryAdapter: MemoryStorageAdapter;\n  private localStorageAdapter: LocalStorageAdapter;\n  private config: CacheServiceConfig;\n\n  constructor(config: CacheServiceConfig) {\n    this.config = config;\n    this.memoryAdapter = new MemoryStorageAdapter();\n    this.localStorageAdapter = new LocalStorageAdapter(config.enableCompression);\n  }\n\n  /**\n   * Get cache entry from the most appropriate storage\n   */\n  async get<T>(key: string): Promise<CacheEntry<T> | null> {\n    // Try memory first (fastest)\n    let entry = await this.memoryAdapter.get<T>(key);\n    if (entry && this.isValid(entry)) {\n      return entry;\n    }\n\n    // Try local storage\n    entry = await this.localStorageAdapter.get<T>(key);\n    if (entry && this.isValid(entry)) {\n      // Promote to memory cache if it's frequently accessed\n      if (entry.metadata.size < 1024 * 1024) { // < 1MB\n        await this.memoryAdapter.set(key, entry);\n      }\n      return entry;\n    }\n\n    return null;\n  }\n\n  /**\n   * Set cache entry using intelligent storage selection\n   */\n  async set<T>(key: string, data: T, options: {\n    ttl?: number;\n    tags?: string[];\n    dependencies?: string[];\n    forceStorage?: CacheStorageType;\n  } = {}): Promise<void> {\n    const now = Date.now();\n    const entry: CacheEntry<T> = {\n      key,\n      data,\n      timestamp: now,\n      ttl: options.ttl || this.config.defaultTTL,\n      tags: options.tags || [],\n      version: 1,\n      metadata: {\n        size: this.calculateSize(data),\n        contentType: 'application/json',\n      },\n      dependencies: options.dependencies || [],\n    };\n\n    // Determine storage based on size and configuration\n    const shouldUseMemory = entry.metadata.size < 1024 * 1024 && // < 1MB\n      (options.forceStorage === CacheStorageType.MEMORY || !options.forceStorage);\n\n    const shouldUsePersistent = options.ttl && options.ttl > 60 * 1000 && // > 1 minute\n      (options.forceStorage === CacheStorageType.LOCAL_STORAGE || !options.forceStorage);\n\n    // Store in memory for fast access\n    if (shouldUseMemory) {\n      await this.memoryAdapter.set(key, entry);\n    }\n\n    // Store in persistent storage for longer TTL\n    if (shouldUsePersistent) {\n      await this.localStorageAdapter.set(key, entry);\n    }\n  }\n\n  /**\n   * Delete cache entry from all storage levels\n   */\n  async delete(key: string): Promise<boolean> {\n    const memoryDeleted = await this.memoryAdapter.delete(key);\n    const localDeleted = await this.localStorageAdapter.delete(key);\n    return memoryDeleted || localDeleted;\n  }\n\n  /**\n   * Clear all cache entries\n   */\n  async clear(): Promise<void> {\n    await this.memoryAdapter.clear();\n    await this.localStorageAdapter.clear();\n  }\n\n  /**\n   * Invalidate cache entries by tags\n   */\n  async invalidateByTags(tags: string[]): Promise<void> {\n    const allKeys = [\n      ...(await this.memoryAdapter.keys()),\n      ...(await this.localStorageAdapter.keys()),\n    ];\n\n    for (const key of allKeys) {\n      const entry = await this.get(key);\n      if (entry && entry.tags.some(tag => tags.includes(tag))) {\n        await this.delete(key);\n      }\n    }\n  }\n\n  /**\n   * Invalidate cache entries by pattern\n   */\n  async invalidateByPattern(pattern: RegExp): Promise<void> {\n    const allKeys = [\n      ...(await this.memoryAdapter.keys()),\n      ...(await this.localStorageAdapter.keys()),\n    ];\n\n    for (const key of allKeys) {\n      if (pattern.test(key)) {\n        await this.delete(key);\n      }\n    }\n  }\n\n  /**\n   * Get cache statistics\n   */\n  async getStats(): Promise<CacheStats> {\n    const memoryKeys = await this.memoryAdapter.keys();\n    const localKeys = await this.localStorageAdapter.keys();\n    const memorySize = await this.memoryAdapter.size();\n    const localSize = await this.localStorageAdapter.size();\n\n    return {\n      totalEntries: memoryKeys.length + localKeys.length,\n      totalSize: memorySize + localSize,\n      hitCount: 0, // Would be tracked with proper analytics\n      missCount: 0, // Would be tracked with proper analytics\n      evictionCount: 0, // Would be tracked with proper analytics\n      hitRate: 0, // Would be calculated from hit/miss counts\n      averageResponseTime: 0, // Would be tracked with proper analytics\n      memoryUsage: {\n        used: memorySize,\n        limit: this.config.maxMemorySize,\n        percentage: (memorySize / this.config.maxMemorySize) * 100,\n      },\n      storageBreakdown: {\n        [CacheStorageType.MEMORY]: {\n          entries: memoryKeys.length,\n          size: memorySize,\n        },\n        [CacheStorageType.LOCAL_STORAGE]: {\n          entries: localKeys.length,\n          size: localSize,\n        },\n        [CacheStorageType.SESSION_STORAGE]: {\n          entries: 0,\n          size: 0,\n        },\n        [CacheStorageType.INDEXED_DB]: {\n          entries: 0,\n          size: 0,\n        },\n      },\n    };\n  }\n\n  /**\n   * Cleanup expired entries\n   */\n  async cleanup(): Promise<void> {\n    const now = Date.now();\n    const allKeys = [\n      ...(await this.memoryAdapter.keys()),\n      ...(await this.localStorageAdapter.keys()),\n    ];\n\n    for (const key of allKeys) {\n      const entry = await this.get(key);\n      if (entry && !this.isValid(entry)) {\n        await this.delete(key);\n      }\n    }\n  }\n\n  /**\n   * Perform cache eviction based on strategy\n   */\n  async evict(): Promise<void> {\n    const memorySize = await this.memoryAdapter.size();\n    if (memorySize <= this.config.maxMemorySize) {\n      return;\n    }\n\n    const keys = await this.memoryAdapter.keys();\n    const entries = await Promise.all(\n      keys.map(async key => ({ key, entry: await this.memoryAdapter.get(key) }))\n    );\n\n    // Sort by eviction strategy\n    let sortedEntries;\n    switch (this.config.invalidationStrategy) {\n      case InvalidationStrategy.LRU:\n        sortedEntries = entries.sort((a, b) => \n          this.memoryAdapter.getAccessTime(a.key) - this.memoryAdapter.getAccessTime(b.key)\n        );\n        break;\n      case InvalidationStrategy.LFU:\n        sortedEntries = entries.sort((a, b) => \n          this.memoryAdapter.getAccessCount(a.key) - this.memoryAdapter.getAccessCount(b.key)\n        );\n        break;\n      case InvalidationStrategy.FIFO:\n        sortedEntries = entries.sort((a, b) => \n          (a.entry?.timestamp || 0) - (b.entry?.timestamp || 0)\n        );\n        break;\n      default:\n        sortedEntries = entries;\n    }\n\n    // Remove entries until we're under the limit\n    let currentSize = memorySize;\n    for (const { key, entry } of sortedEntries) {\n      if (currentSize <= this.config.maxMemorySize) {\n        break;\n      }\n      if (entry) {\n        await this.memoryAdapter.delete(key);\n        currentSize -= entry.metadata.size;\n      }\n    }\n  }\n\n  private isValid<T>(entry: CacheEntry<T>): boolean {\n    const now = Date.now();\n    return now - entry.timestamp < entry.ttl;\n  }\n\n  private calculateSize(data: unknown): number {\n    return new Blob([JSON.stringify(data)]).size;\n  }\n}\n\n// =============================================================================\n// Background Sync Manager\n// =============================================================================\n\n/**\n * Background sync manager for offline support\n */\nclass BackgroundSyncManager {\n  private syncQueue: SyncOperation[] = [];\n  private isProcessing = false;\n  private config: CacheServiceConfig;\n  private cache: MultiLevelCache;\n\n  constructor(config: CacheServiceConfig, cache: MultiLevelCache) {\n    this.config = config;\n    this.cache = cache;\n    \n    if (config.enableBackgroundSync) {\n      this.startSyncProcessor();\n    }\n  }\n\n  /**\n   * Queue a sync operation\n   */\n  queueSync(operation: Omit<SyncOperation, 'id' | 'scheduledAt' | 'retryCount'>): void {\n    if (this.syncQueue.length >= this.config.maxSyncQueueSize) {\n      // Remove oldest low-priority operation\n      const lowPriorityIndex = this.syncQueue.findIndex(op => op.priority === 'low');\n      if (lowPriorityIndex !== -1) {\n        this.syncQueue.splice(lowPriorityIndex, 1);\n      } else {\n        // Remove oldest operation\n        this.syncQueue.shift();\n      }\n    }\n\n    const syncOperation: SyncOperation = {\n      ...operation,\n      id: crypto.randomUUID(),\n      scheduledAt: Date.now(),\n      retryCount: 0,\n    };\n\n    // Insert based on priority\n    if (operation.priority === 'high') {\n      this.syncQueue.unshift(syncOperation);\n    } else {\n      this.syncQueue.push(syncOperation);\n    }\n  }\n\n  /**\n   * Process sync queue\n   */\n  private async processSyncQueue(): Promise<void> {\n    if (this.isProcessing || this.syncQueue.length === 0) {\n      return;\n    }\n\n    this.isProcessing = true;\n\n    try {\n      while (this.syncQueue.length > 0) {\n        const operation = this.syncQueue.shift()!;\n        \n        try {\n          await this.executeSync(operation);\n        } catch (error) {\n          console.error('Sync operation failed:', error);\n          \n          // Retry logic\n          if (operation.retryCount < operation.maxRetries) {\n            operation.retryCount++;\n            operation.scheduledAt = Date.now() + (1000 * Math.pow(2, operation.retryCount));\n            this.syncQueue.push(operation);\n          }\n        }\n      }\n    } finally {\n      this.isProcessing = false;\n    }\n  }\n\n  /**\n   * Execute individual sync operation\n   */\n  private async executeSync(operation: SyncOperation): Promise<void> {\n    switch (operation.operation) {\n      case 'fetch':\n        await this.executeFetch(operation);\n        break;\n      case 'invalidate':\n        await this.cache.delete(operation.key);\n        break;\n      case 'update':\n        await this.executeUpdate(operation);\n        break;\n    }\n  }\n\n  /**\n   * Execute fetch operation\n   */\n  private async executeFetch(operation: SyncOperation): Promise<void> {\n    const response = await fetch(operation.url, {\n      method: operation.method,\n      headers: {\n        'Content-Type': 'application/json',\n      },\n    });\n\n    if (response.ok) {\n      const data = await response.json();\n      await this.cache.set(operation.key, data, {\n        ttl: this.config.defaultTTL,\n        tags: ['background-sync'],\n      });\n    }\n  }\n\n  /**\n   * Execute update operation\n   */\n  private async executeUpdate(operation: SyncOperation): Promise<void> {\n    const response = await fetch(operation.url, {\n      method: operation.method,\n      headers: {\n        'Content-Type': 'application/json',\n      },\n      body: JSON.stringify(operation.data),\n    });\n\n    if (response.ok) {\n      const data = await response.json();\n      await this.cache.set(operation.key, data, {\n        ttl: this.config.defaultTTL,\n        tags: ['background-sync'],\n      });\n    }\n  }\n\n  /**\n   * Start background sync processor\n   */\n  private startSyncProcessor(): void {\n    setInterval(() => {\n      this.processSyncQueue();\n    }, this.config.syncInterval);\n  }\n\n  /**\n   * Get sync queue status\n   */\n  getQueueStatus(): {\n    queueSize: number;\n    isProcessing: boolean;\n    highPriorityCount: number;\n    failedOperations: number;\n  } {\n    const highPriorityCount = this.syncQueue.filter(op => op.priority === 'high').length;\n    const failedOperations = this.syncQueue.filter(op => op.retryCount > 0).length;\n\n    return {\n      queueSize: this.syncQueue.length,\n      isProcessing: this.isProcessing,\n      highPriorityCount,\n      failedOperations,\n    };\n  }\n}\n\n// =============================================================================\n// Main Cache Service\n// =============================================================================\n\n/**\n * Enterprise cache service with advanced features\n */\nexport class CacheService {\n  private config: CacheServiceConfig;\n  private cache: MultiLevelCache;\n  private syncManager: BackgroundSyncManager;\n  private cleanupTimer: ReturnType<typeof setInterval> | null = null;\n  private requestDeduplication = new Map<string, Promise<unknown>>();\n  private optimisticUpdates = new Map<string, { original: unknown; rollbackFn: () => Promise<void> }>();\n\n  constructor(config: Partial<CacheServiceConfig> = {}) {\n    this.config = { ...DEFAULT_CACHE_CONFIG, ...config };\n    this.cache = new MultiLevelCache(this.config);\n    this.syncManager = new BackgroundSyncManager(this.config, this.cache);\n    \n    this.startCleanupTimer();\n    this.setupCrossTabSync();\n  }\n\n  // ===========================================================================\n  // Core Cache Operations\n  // ===========================================================================\n\n  /**\n   * Get cached data\n   * \n   * @param key - Cache key\n   * @returns Cached data or null\n   */\n  async get<T>(key: string): Promise<T | null> {\n    const entry = await this.cache.get<T>(key);\n    return entry ? entry.data : null;\n  }\n\n  /**\n   * Set cached data\n   * \n   * @param key - Cache key\n   * @param data - Data to cache\n   * @param options - Cache options\n   */\n  async set<T>(\n    key: string,\n    data: T,\n    options: {\n      ttl?: number;\n      tags?: string[];\n      dependencies?: string[];\n      forceStorage?: CacheStorageType;\n    } = {}\n  ): Promise<void> {\n    await this.cache.set(key, data, options);\n  }\n\n  /**\n   * Delete cached data\n   * \n   * @param key - Cache key\n   * @returns True if data was deleted\n   */\n  async delete(key: string): Promise<boolean> {\n    return this.cache.delete(key);\n  }\n\n  /**\n   * Check if key exists in cache\n   * \n   * @param key - Cache key\n   * @returns True if key exists and is valid\n   */\n  async has(key: string): Promise<boolean> {\n    const entry = await this.cache.get(key);\n    return entry !== null;\n  }\n\n  /**\n   * Clear all cached data\n   */\n  async clear(): Promise<void> {\n    await this.cache.clear();\n    this.requestDeduplication.clear();\n    this.optimisticUpdates.clear();\n  }\n\n  // ===========================================================================\n  // Advanced Cache Operations\n  // ===========================================================================\n\n  /**\n   * Get or fetch data with caching\n   * \n   * @param key - Cache key\n   * @param fetchFn - Function to fetch data if not cached\n   * @param options - Cache options\n   * @returns Cached or fetched data\n   */\n  async getOrFetch<T>(\n    key: string,\n    fetchFn: () => Promise<T>,\n    options: {\n      ttl?: number;\n      tags?: string[];\n      forceRefresh?: boolean;\n      backgroundRefresh?: boolean;\n    } = {}\n  ): Promise<T> {\n    // Check cache first unless force refresh\n    if (!options.forceRefresh) {\n      const cached = await this.get<T>(key);\n      if (cached !== null) {\n        // Schedule background refresh if requested\n        if (options.backgroundRefresh) {\n          this.syncManager.queueSync({\n            key,\n            operation: 'fetch',\n            url: '', // Would need to be provided\n            method: 'GET',\n            priority: 'low',\n            maxRetries: 3,\n          });\n        }\n        return cached;\n      }\n    }\n\n    // Use request deduplication\n    const existingRequest = this.requestDeduplication.get(key);\n    if (existingRequest) {\n      return existingRequest as Promise<T>;\n    }\n\n    // Fetch and cache data\n    const fetchPromise = fetchFn().then(async (data) => {\n      await this.set(key, data, {\n        ttl: options.ttl,\n        tags: options.tags,\n      });\n      return data;\n    }).finally(() => {\n      this.requestDeduplication.delete(key);\n    });\n\n    this.requestDeduplication.set(key, fetchPromise);\n    return fetchPromise;\n  }\n\n  /**\n   * Invalidate cache by tags\n   * \n   * @param tags - Tags to invalidate\n   */\n  async invalidateByTags(tags: string[]): Promise<void> {\n    await this.cache.invalidateByTags(tags);\n  }\n\n  /**\n   * Invalidate cache by pattern\n   * \n   * @param pattern - Pattern to match keys\n   */\n  async invalidateByPattern(pattern: RegExp): Promise<void> {\n    await this.cache.invalidateByPattern(pattern);\n  }\n\n  /**\n   * Invalidate cache by dependency\n   * \n   * @param dependency - Dependency key\n   */\n  async invalidateByDependency(dependency: string): Promise<void> {\n    // Find all entries that depend on this key\n    const allKeys = [\n      ...(await this.cache.memoryAdapter.keys()),\n      ...(await this.cache.localStorageAdapter.keys()),\n    ];\n\n    for (const key of allKeys) {\n      const entry = await this.cache.get(key);\n      if (entry && entry.dependencies.includes(dependency)) {\n        await this.cache.delete(key);\n      }\n    }\n  }\n\n  // ===========================================================================\n  // Optimistic Updates\n  // ===========================================================================\n\n  /**\n   * Perform optimistic update\n   * \n   * @param key - Cache key\n   * @param optimisticData - Optimistic data\n   * @param updateFn - Function to perform actual update\n   * @param config - Optimistic update configuration\n   */\n  async optimisticUpdate<T>(\n    key: string,\n    optimisticData: T,\n    updateFn: () => Promise<T>,\n    config: OptimisticUpdateConfig<T> = { enabled: true, updateKey: key, rollbackOnError: true }\n  ): Promise<T> {\n    if (!config.enabled) {\n      return updateFn();\n    }\n\n    // Store original data for rollback\n    const originalData = await this.get<T>(key);\n    const rollbackFn = async () => {\n      if (originalData !== null) {\n        await this.set(key, originalData);\n      } else {\n        await this.delete(key);\n      }\n    };\n\n    this.optimisticUpdates.set(key, { original: originalData, rollbackFn });\n\n    try {\n      // Apply optimistic update\n      const finalOptimisticData = typeof config.optimisticData === 'function'\n        ? config.optimisticData(originalData as T)\n        : optimisticData;\n      \n      await this.set(key, finalOptimisticData);\n\n      // Perform actual update\n      const result = await updateFn();\n      \n      // Update with real result\n      await this.set(key, result);\n      \n      // Clean up\n      this.optimisticUpdates.delete(key);\n      \n      return result;\n    } catch (error) {\n      // Rollback if configured\n      if (config.rollbackOnError) {\n        await rollbackFn();\n      }\n      \n      this.optimisticUpdates.delete(key);\n      throw error;\n    }\n  }\n\n  /**\n   * Rollback optimistic update\n   * \n   * @param key - Cache key\n   */\n  async rollbackOptimisticUpdate(key: string): Promise<void> {\n    const update = this.optimisticUpdates.get(key);\n    if (update) {\n      await update.rollbackFn();\n      this.optimisticUpdates.delete(key);\n    }\n  }\n\n  // ===========================================================================\n  // Analytics and Monitoring\n  // ===========================================================================\n\n  /**\n   * Get cache statistics\n   */\n  async getStats(): Promise<CacheStats> {\n    return this.cache.getStats();\n  }\n\n  /**\n   * Get background sync status\n   */\n  getSyncStatus(): {\n    queueSize: number;\n    isProcessing: boolean;\n    highPriorityCount: number;\n    failedOperations: number;\n  } {\n    return this.syncManager.getQueueStatus();\n  }\n\n  /**\n   * Export cache data for debugging\n   */\n  async exportCache(): Promise<Record<string, unknown>> {\n    const memoryKeys = await this.cache.memoryAdapter.keys();\n    const localKeys = await this.cache.localStorageAdapter.keys();\n    const allKeys = [...new Set([...memoryKeys, ...localKeys])];\n\n    const data: Record<string, unknown> = {};\n    for (const key of allKeys) {\n      const entry = await this.cache.get(key);\n      if (entry) {\n        data[key] = {\n          data: entry.data,\n          metadata: entry.metadata,\n          timestamp: entry.timestamp,\n          ttl: entry.ttl,\n          tags: entry.tags,\n        };\n      }\n    }\n\n    return data;\n  }\n\n  // ===========================================================================\n  // Private Methods\n  // ===========================================================================\n\n  /**\n   * Start cleanup timer\n   */\n  private startCleanupTimer(): void {\n    this.cleanupTimer = setInterval(() => {\n      this.cache.cleanup();\n      this.cache.evict();\n    }, this.config.cleanupInterval);\n  }\n\n  /**\n   * Setup cross-tab synchronization\n   */\n  private setupCrossTabSync(): void {\n    if (!this.config.enableCrossTabSync || typeof window === 'undefined') {\n      return;\n    }\n\n    // Listen for storage events from other tabs\n    window.addEventListener('storage', (event) => {\n      if (event.key?.startsWith('api_cache_')) {\n        const cacheKey = event.key.substring('api_cache_'.length);\n        \n        // Invalidate memory cache when localStorage changes\n        if (event.newValue === null) {\n          // Entry was deleted\n          this.cache.memoryAdapter.delete(cacheKey);\n        } else if (event.newValue !== event.oldValue) {\n          // Entry was updated\n          this.cache.memoryAdapter.delete(cacheKey);\n        }\n      }\n    });\n  }\n\n  /**\n   * Cleanup resources\n   */\n  dispose(): void {\n    if (this.cleanupTimer) {\n      clearInterval(this.cleanupTimer);\n      this.cleanupTimer = null;\n    }\n    \n    this.requestDeduplication.clear();\n    this.optimisticUpdates.clear();\n  }\n}\n\n// Export singleton instance\nexport const cacheService = new CacheService();\n\n// Export types and configurations\nexport {\n  CacheStorageType,\n  InvalidationStrategy,\n  DEFAULT_CACHE_CONFIG,\n};\n\nexport type {\n  CacheEntry,\n  CacheStats,\n  CacheServiceConfig,\n  SyncOperation,\n};
+ */
+export enum CacheStorageType {
+  MEMORY = 'memory',
+  LOCAL_STORAGE = 'localStorage',
+  SESSION_STORAGE = 'sessionStorage',
+  INDEXED_DB = 'indexedDB',
+}
+
+/**
+ * Cache entry metadata
+ */
+export interface CacheEntry<T = unknown> {
+  readonly key: string;
+  readonly data: T;
+  readonly timestamp: number;
+  readonly ttl: number;
+  readonly tags: string[];
+  readonly version: number;
+  readonly metadata: {
+    readonly requestId?: string;
+    readonly etag?: string;
+    readonly lastModified?: string;
+    readonly contentType?: string;
+    readonly size: number;
+  };
+  readonly dependencies: string[];
+}
+
+/**
+ * Cache statistics
+ */
+export interface CacheStats {
+  readonly totalEntries: number;
+  readonly totalSize: number;
+  readonly hitCount: number;
+  readonly missCount: number;
+  readonly evictionCount: number;
+  readonly hitRate: number;
+  readonly averageResponseTime: number;
+  readonly memoryUsage: {
+    readonly used: number;
+    readonly limit: number;
+    readonly percentage: number;
+  };
+  readonly storageBreakdown: Record<CacheStorageType, {
+    readonly entries: number;
+    readonly size: number;
+  }>;
+}
+
+/**
+ * Cache invalidation strategies
+ */
+export enum InvalidationStrategy {
+  TTL = 'ttl',           // Time-based expiration
+  LRU = 'lru',           // Least Recently Used
+  LFU = 'lfu',           // Least Frequently Used
+  FIFO = 'fifo',         // First In, First Out
+  TAG_BASED = 'tag',     // Tag-based invalidation
+  DEPENDENCY = 'dep',    // Dependency-based invalidation
+}
+
+/**
+ * Background sync operation
+ */
+export interface SyncOperation {
+  readonly id: string;
+  readonly key: string;
+  readonly operation: 'fetch' | 'invalidate' | 'update';
+  readonly url: string;
+  readonly method: string;
+  readonly data?: unknown;
+  readonly priority: 'low' | 'normal' | 'high';
+  readonly scheduledAt: number;
+  readonly maxRetries: number;
+  readonly retryCount: number;
+}
+
+/**
+ * Cache configuration
+ */
+export interface CacheServiceConfig {
+  readonly maxMemorySize: number; // bytes
+  readonly maxLocalStorageSize: number; // bytes
+  readonly defaultTTL: number; // milliseconds
+  readonly cleanupInterval: number; // milliseconds
+  readonly invalidationStrategy: InvalidationStrategy;
+  readonly enableBackgroundSync: boolean;
+  readonly enableCrossTabSync: boolean;
+  readonly enableCompression: boolean;
+  readonly enableEncryption: boolean;
+  readonly syncInterval: number; // milliseconds
+  readonly maxSyncQueueSize: number;
+  readonly enableAnalytics: boolean;
+}
+
+/**
+ * Default cache configuration
+ */
+const DEFAULT_CACHE_CONFIG: CacheServiceConfig = {
+  maxMemorySize: 50 * 1024 * 1024, // 50MB
+  maxLocalStorageSize: 10 * 1024 * 1024, // 10MB
+  defaultTTL: 5 * 60 * 1000, // 5 minutes
+  cleanupInterval: 60 * 1000, // 1 minute
+  invalidationStrategy: InvalidationStrategy.LRU,
+  enableBackgroundSync: true,
+  enableCrossTabSync: true,
+  enableCompression: true,
+  enableEncryption: false,
+  syncInterval: 30 * 1000, // 30 seconds
+  maxSyncQueueSize: 100,
+  enableAnalytics: true,
+};
+
+// =============================================================================
+// Storage Adapters
+// =============================================================================
+
+/**
+ * Base storage adapter interface
+ */
+interface StorageAdapter {
+  get<T>(key: string): Promise<CacheEntry<T> | null>;
+  set<T>(key: string, entry: CacheEntry<T>): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  clear(): Promise<void>;
+  keys(): Promise<string[]>;
+  size(): Promise<number>;
+}
+
+/**
+ * Memory storage adapter
+ */
+class MemoryStorageAdapter implements StorageAdapter {
+  private store = new Map<string, CacheEntry>();
+  private accessTimes = new Map<string, number>();
+  private accessCounts = new Map<string, number>();
+
+  async get<T>(key: string): Promise<CacheEntry<T> | null> {
+    const entry = this.store.get(key) as CacheEntry<T> | undefined;
+    if (entry) {
+      // Update access statistics
+      this.accessTimes.set(key, Date.now());
+      this.accessCounts.set(key, (this.accessCounts.get(key) || 0) + 1);
+      return entry;
+    }
+    return null;
+  }
+
+  async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {
+    this.store.set(key, entry);
+    this.accessTimes.set(key, Date.now());
+    this.accessCounts.set(key, 1);
+  }
+
+  async delete(key: string): Promise<boolean> {
+    const deleted = this.store.delete(key);
+    this.accessTimes.delete(key);
+    this.accessCounts.delete(key);
+    return deleted;
+  }
+
+  async clear(): Promise<void> {
+    this.store.clear();
+    this.accessTimes.clear();
+    this.accessCounts.clear();
+  }
+
+  async keys(): Promise<string[]> {
+    return Array.from(this.store.keys());
+  }
+
+  async size(): Promise<number> {
+    return Array.from(this.store.values())
+      .reduce((total, entry) => total + entry.metadata.size, 0);
+  }
+
+  getAccessTime(key: string): number {
+    return this.accessTimes.get(key) || 0;
+  }
+
+  getAccessCount(key: string): number {
+    return this.accessCounts.get(key) || 0;
+  }
+}
+
+/**
+ * Local storage adapter with compression
+ */
+class LocalStorageAdapter implements StorageAdapter {
+  private prefix = 'api_cache_';
+  private compressionEnabled: boolean;
+
+  constructor(compressionEnabled = true) {
+    this.compressionEnabled = compressionEnabled;
+  }
+
+  async get<T>(key: string): Promise<CacheEntry<T> | null> {
+    try {
+      const item = localStorage.getItem(this.prefix + key);
+      if (!item) return null;
+
+      const data = this.compressionEnabled ? this.decompress(item) : item;
+      return JSON.parse(data);
+    } catch (error) {
+      console.error('LocalStorage get error:', error);
+      return null;
+    }
+  }
+
+  async set<T>(key: string, entry: CacheEntry<T>): Promise<void> {
+    try {
+      const serialized = JSON.stringify(entry);
+      const data = this.compressionEnabled ? this.compress(serialized) : serialized;
+      localStorage.setItem(this.prefix + key, data);
+    } catch (error) {
+      console.error('LocalStorage set error:', error);
+      // Handle quota exceeded errors
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        await this.cleanup();
+        // Retry once after cleanup
+        try {
+          const serialized = JSON.stringify(entry);
+          const data = this.compressionEnabled ? this.compress(serialized) : serialized;
+          localStorage.setItem(this.prefix + key, data);
+        } catch (retryError) {
+          console.error('LocalStorage retry failed:', retryError);
+        }
+      }
+    }
+  }
+
+  async delete(key: string): Promise<boolean> {
+    try {
+      const fullKey = this.prefix + key;
+      const existed = localStorage.getItem(fullKey) !== null;
+      localStorage.removeItem(fullKey);
+      return existed;
+    } catch (error) {
+      console.error('LocalStorage delete error:', error);
+      return false;
+    }
+  }
+
+  async clear(): Promise<void> {
+    try {
+      const keysToDelete = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(this.prefix)) {
+          keysToDelete.push(key);
+        }
+      }
+      keysToDelete.forEach(key => localStorage.removeItem(key));
+    } catch (error) {
+      console.error('LocalStorage clear error:', error);
+    }
+  }
+
+  async keys(): Promise<string[]> {
+    const keys = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(this.prefix)) {
+          keys.push(key.substring(this.prefix.length));
+        }
+      }
+    } catch (error) {
+      console.error('LocalStorage keys error:', error);
+    }
+    return keys;
+  }
+
+  async size(): Promise<number> {
+    let totalSize = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(this.prefix)) {
+          const value = localStorage.getItem(key);
+          if (value) {
+            totalSize += new Blob([value]).size;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('LocalStorage size error:', error);
+    }
+    return totalSize;
+  }
+
+  private compress(data: string): string {
+    // Simple compression using LZ-string or similar
+    // For now, return as-is (would implement actual compression)
+    return data;
+  }
+
+  private decompress(data: string): string {
+    // Simple decompression
+    // For now, return as-is (would implement actual decompression)
+    return data;
+  }
+
+  private async cleanup(): Promise<void> {
+    // Remove expired entries to free up space
+    const now = Date.now();
+    const keysToDelete = [];
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(this.prefix)) {
+        try {
+          const item = localStorage.getItem(key);
+          if (item) {
+            const entry: CacheEntry = JSON.parse(item);
+            if (now - entry.timestamp > entry.ttl) {
+              keysToDelete.push(key);
+            }
+          }
+        } catch (error) {
+          // If we can't parse it, remove it
+          keysToDelete.push(key);
+        }
+      }
+    }
+
+    keysToDelete.forEach(key => localStorage.removeItem(key));
+  }
+}
+
+// =============================================================================
+// Multi-Level Cache Manager
+// =============================================================================
+
+/**
+ * Multi-level cache with intelligent storage selection
+ */
+class MultiLevelCache {
+  private memoryAdapter: MemoryStorageAdapter;
+  private localStorageAdapter: LocalStorageAdapter;
+  private config: CacheServiceConfig;
+
+  constructor(config: CacheServiceConfig) {
+    this.config = config;
+    this.memoryAdapter = new MemoryStorageAdapter();
+    this.localStorageAdapter = new LocalStorageAdapter(config.enableCompression);
+  }
+
+  /**
+   * Get cache entry from the most appropriate storage
+   */
+  async get<T>(key: string): Promise<CacheEntry<T> | null> {
+    // Try memory first (fastest)
+    let entry = await this.memoryAdapter.get<T>(key);
+    if (entry && this.isValid(entry)) {
+      return entry;
+    }
+
+    // Try local storage
+    entry = await this.localStorageAdapter.get<T>(key);
+    if (entry && this.isValid(entry)) {
+      // Promote to memory cache if it's frequently accessed
+      if (entry.metadata.size < 1024 * 1024) { // < 1MB
+        await this.memoryAdapter.set(key, entry);
+      }
+      return entry;
+    }
+
+    return null;
+  }
+
+  /**
+   * Set cache entry using intelligent storage selection
+   */
+  async set<T>(key: string, data: T, options: {
+    ttl?: number;
+    tags?: string[];
+    dependencies?: string[];
+    forceStorage?: CacheStorageType;
+  } = {}): Promise<void> {
+    const now = Date.now();
+    const entry: CacheEntry<T> = {
+      key,
+      data,
+      timestamp: now,
+      ttl: options.ttl || this.config.defaultTTL,
+      tags: options.tags || [],
+      version: 1,
+      metadata: {
+        size: this.calculateSize(data),
+        contentType: 'application/json',
+      },
+      dependencies: options.dependencies || [],
+    };
+
+    // Determine storage based on size and configuration
+    const shouldUseMemory = entry.metadata.size < 1024 * 1024 && // < 1MB
+      (options.forceStorage === CacheStorageType.MEMORY || !options.forceStorage);
+
+    const shouldUsePersistent = options.ttl && options.ttl > 60 * 1000 && // > 1 minute
+      (options.forceStorage === CacheStorageType.LOCAL_STORAGE || !options.forceStorage);
+
+    // Store in memory for fast access
+    if (shouldUseMemory) {
+      await this.memoryAdapter.set(key, entry);
+    }
+
+    // Store in persistent storage for longer TTL
+    if (shouldUsePersistent) {
+      await this.localStorageAdapter.set(key, entry);
+    }
+  }
+
+  /**
+   * Delete cache entry from all storage levels
+   */
+  async delete(key: string): Promise<boolean> {
+    const memoryDeleted = await this.memoryAdapter.delete(key);
+    const localDeleted = await this.localStorageAdapter.delete(key);
+    return memoryDeleted || localDeleted;
+  }
+
+  /**
+   * Clear all cache entries
+   */
+  async clear(): Promise<void> {
+    await this.memoryAdapter.clear();
+    await this.localStorageAdapter.clear();
+  }
+
+  /**
+   * Invalidate cache entries by tags
+   */
+  async invalidateByTags(tags: string[]): Promise<void> {
+    const allKeys = [
+      ...(await this.memoryAdapter.keys()),
+      ...(await this.localStorageAdapter.keys()),
+    ];
+
+    for (const key of allKeys) {
+      const entry = await this.get(key);
+      if (entry && entry.tags.some(tag => tags.includes(tag))) {
+        await this.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Invalidate cache entries by pattern
+   */
+  async invalidateByPattern(pattern: RegExp): Promise<void> {
+    const allKeys = [
+      ...(await this.memoryAdapter.keys()),
+      ...(await this.localStorageAdapter.keys()),
+    ];
+
+    for (const key of allKeys) {
+      if (pattern.test(key)) {
+        await this.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Get cache statistics
+   */
+  async getStats(): Promise<CacheStats> {
+    const memoryKeys = await this.memoryAdapter.keys();
+    const localKeys = await this.localStorageAdapter.keys();
+    const memorySize = await this.memoryAdapter.size();
+    const localSize = await this.localStorageAdapter.size();
+
+    return {
+      totalEntries: memoryKeys.length + localKeys.length,
+      totalSize: memorySize + localSize,
+      hitCount: 0, // Would be tracked with proper analytics
+      missCount: 0, // Would be tracked with proper analytics
+      evictionCount: 0, // Would be tracked with proper analytics
+      hitRate: 0, // Would be calculated from hit/miss counts
+      averageResponseTime: 0, // Would be tracked with proper analytics
+      memoryUsage: {
+        used: memorySize,
+        limit: this.config.maxMemorySize,
+        percentage: (memorySize / this.config.maxMemorySize) * 100,
+      },
+      storageBreakdown: {
+        [CacheStorageType.MEMORY]: {
+          entries: memoryKeys.length,
+          size: memorySize,
+        },
+        [CacheStorageType.LOCAL_STORAGE]: {
+          entries: localKeys.length,
+          size: localSize,
+        },
+        [CacheStorageType.SESSION_STORAGE]: {
+          entries: 0,
+          size: 0,
+        },
+        [CacheStorageType.INDEXED_DB]: {
+          entries: 0,
+          size: 0,
+        },
+      },
+    };
+  }
+
+  /**
+   * Cleanup expired entries
+   */
+  async cleanup(): Promise<void> {
+    const now = Date.now();
+    const allKeys = [
+      ...(await this.memoryAdapter.keys()),
+      ...(await this.localStorageAdapter.keys()),
+    ];
+
+    for (const key of allKeys) {
+      const entry = await this.get(key);
+      if (entry && !this.isValid(entry)) {
+        await this.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Perform cache eviction based on strategy
+   */
+  async evict(): Promise<void> {
+    const memorySize = await this.memoryAdapter.size();
+    if (memorySize <= this.config.maxMemorySize) {
+      return;
+    }
+
+    const keys = await this.memoryAdapter.keys();
+    const entries = await Promise.all(
+      keys.map(async key => ({ key, entry: await this.memoryAdapter.get(key) }))
+    );
+
+    // Sort by eviction strategy
+    let sortedEntries;
+    switch (this.config.invalidationStrategy) {
+      case InvalidationStrategy.LRU:
+        sortedEntries = entries.sort((a, b) => 
+          this.memoryAdapter.getAccessTime(a.key) - this.memoryAdapter.getAccessTime(b.key)
+        );
+        break;
+      case InvalidationStrategy.LFU:
+        sortedEntries = entries.sort((a, b) => 
+          this.memoryAdapter.getAccessCount(a.key) - this.memoryAdapter.getAccessCount(b.key)
+        );
+        break;
+      case InvalidationStrategy.FIFO:
+        sortedEntries = entries.sort((a, b) => 
+          (a.entry?.timestamp || 0) - (b.entry?.timestamp || 0)
+        );
+        break;
+      default:
+        sortedEntries = entries;
+    }
+
+    // Remove entries until we're under the limit
+    let currentSize = memorySize;
+    for (const { key, entry } of sortedEntries) {
+      if (currentSize <= this.config.maxMemorySize) {
+        break;
+      }
+      if (entry) {
+        await this.memoryAdapter.delete(key);
+        currentSize -= entry.metadata.size;
+      }
+    }
+  }
+
+  private isValid<T>(entry: CacheEntry<T>): boolean {
+    const now = Date.now();
+    return now - entry.timestamp < entry.ttl;
+  }
+
+  private calculateSize(data: unknown): number {
+    return new Blob([JSON.stringify(data)]).size;
+  }
+}
+
+// =============================================================================
+// Background Sync Manager
+// =============================================================================
+
+/**
+ * Background sync manager for offline support
+ */
+class BackgroundSyncManager {
+  private syncQueue: SyncOperation[] = [];
+  private isProcessing = false;
+  private config: CacheServiceConfig;
+  private cache: MultiLevelCache;
+
+  constructor(config: CacheServiceConfig, cache: MultiLevelCache) {
+    this.config = config;
+    this.cache = cache;
+    
+    if (config.enableBackgroundSync) {
+      this.startSyncProcessor();
+    }
+  }
+
+  /**
+   * Queue a sync operation
+   */
+  queueSync(operation: Omit<SyncOperation, 'id' | 'scheduledAt' | 'retryCount'>): void {
+    if (this.syncQueue.length >= this.config.maxSyncQueueSize) {
+      // Remove oldest low-priority operation
+      const lowPriorityIndex = this.syncQueue.findIndex(op => op.priority === 'low');
+      if (lowPriorityIndex !== -1) {
+        this.syncQueue.splice(lowPriorityIndex, 1);
+      } else {
+        // Remove oldest operation
+        this.syncQueue.shift();
+      }
+    }
+
+    const syncOperation: SyncOperation = {
+      ...operation,
+      id: crypto.randomUUID(),
+      scheduledAt: Date.now(),
+      retryCount: 0,
+    };
+
+    // Insert based on priority
+    if (operation.priority === 'high') {
+      this.syncQueue.unshift(syncOperation);
+    } else {
+      this.syncQueue.push(syncOperation);
+    }
+  }
+
+  /**
+   * Process sync queue
+   */
+  private async processSyncQueue(): Promise<void> {
+    if (this.isProcessing || this.syncQueue.length === 0) {
+      return;
+    }
+
+    this.isProcessing = true;
+
+    try {
+      while (this.syncQueue.length > 0) {
+        const operation = this.syncQueue.shift()!;
+        
+        try {
+          await this.executeSync(operation);
+        } catch (error) {
+          console.error('Sync operation failed:', error);
+          
+          // Retry logic
+          if (operation.retryCount < operation.maxRetries) {
+            operation.retryCount++;
+            operation.scheduledAt = Date.now() + (1000 * Math.pow(2, operation.retryCount));
+            this.syncQueue.push(operation);
+          }
+        }
+      }
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  /**
+   * Execute individual sync operation
+   */
+  private async executeSync(operation: SyncOperation): Promise<void> {
+    switch (operation.operation) {
+      case 'fetch':
+        await this.executeFetch(operation);
+        break;
+      case 'invalidate':
+        await this.cache.delete(operation.key);
+        break;
+      case 'update':
+        await this.executeUpdate(operation);
+        break;
+    }
+  }
+
+  /**
+   * Execute fetch operation
+   */
+  private async executeFetch(operation: SyncOperation): Promise<void> {
+    const response = await fetch(operation.url, {
+      method: operation.method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      await this.cache.set(operation.key, data, {
+        ttl: this.config.defaultTTL,
+        tags: ['background-sync'],
+      });
+    }
+  }
+
+  /**
+   * Execute update operation
+   */
+  private async executeUpdate(operation: SyncOperation): Promise<void> {
+    const response = await fetch(operation.url, {
+      method: operation.method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(operation.data),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      await this.cache.set(operation.key, data, {
+        ttl: this.config.defaultTTL,
+        tags: ['background-sync'],
+      });
+    }
+  }
+
+  /**
+   * Start background sync processor
+   */
+  private startSyncProcessor(): void {
+    setInterval(() => {
+      this.processSyncQueue();
+    }, this.config.syncInterval);
+  }
+
+  /**
+   * Get sync queue status
+   */
+  getQueueStatus(): {
+    queueSize: number;
+    isProcessing: boolean;
+    highPriorityCount: number;
+    failedOperations: number;
+  } {
+    const highPriorityCount = this.syncQueue.filter(op => op.priority === 'high').length;
+    const failedOperations = this.syncQueue.filter(op => op.retryCount > 0).length;
+
+    return {
+      queueSize: this.syncQueue.length,
+      isProcessing: this.isProcessing,
+      highPriorityCount,
+      failedOperations,
+    };
+  }
+}
+
+// =============================================================================
+// Main Cache Service
+// =============================================================================
+
+/**
+ * Enterprise cache service with advanced features
+ */
+export class CacheService {
+  private config: CacheServiceConfig;
+  private cache: MultiLevelCache;
+  private syncManager: BackgroundSyncManager;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private requestDeduplication = new Map<string, Promise<unknown>>();
+  private optimisticUpdates = new Map<string, { original: unknown; rollbackFn: () => Promise<void> }>();
+
+  constructor(config: Partial<CacheServiceConfig> = {}) {
+    this.config = { ...DEFAULT_CACHE_CONFIG, ...config };
+    this.cache = new MultiLevelCache(this.config);
+    this.syncManager = new BackgroundSyncManager(this.config, this.cache);
+    
+    this.startCleanupTimer();
+    this.setupCrossTabSync();
+  }
+
+  // ===========================================================================
+  // Core Cache Operations
+  // ===========================================================================
+
+  /**
+   * Get cached data
+   * 
+   * @param key - Cache key
+   * @returns Cached data or null
+   */
+  async get<T>(key: string): Promise<T | null> {
+    const entry = await this.cache.get<T>(key);
+    return entry ? entry.data : null;
+  }
+
+  /**
+   * Set cached data
+   * 
+   * @param key - Cache key
+   * @param data - Data to cache
+   * @param options - Cache options
+   */
+  async set<T>(
+    key: string,
+    data: T,
+    options: {
+      ttl?: number;
+      tags?: string[];
+      dependencies?: string[];
+      forceStorage?: CacheStorageType;
+    } = {}
+  ): Promise<void> {
+    await this.cache.set(key, data, options);
+  }
+
+  /**
+   * Delete cached data
+   * 
+   * @param key - Cache key
+   * @returns True if data was deleted
+   */
+  async delete(key: string): Promise<boolean> {
+    return this.cache.delete(key);
+  }
+
+  /**
+   * Check if key exists in cache
+   * 
+   * @param key - Cache key
+   * @returns True if key exists and is valid
+   */
+  async has(key: string): Promise<boolean> {
+    const entry = await this.cache.get(key);
+    return entry !== null;
+  }
+
+  /**
+   * Clear all cached data
+   */
+  async clear(): Promise<void> {
+    await this.cache.clear();
+    this.requestDeduplication.clear();
+    this.optimisticUpdates.clear();
+  }
+
+  // ===========================================================================
+  // Advanced Cache Operations
+  // ===========================================================================
+
+  /**
+   * Get or fetch data with caching
+   * 
+   * @param key - Cache key
+   * @param fetchFn - Function to fetch data if not cached
+   * @param options - Cache options
+   * @returns Cached or fetched data
+   */
+  async getOrFetch<T>(
+    key: string,
+    fetchFn: () => Promise<T>,
+    options: {
+      ttl?: number;
+      tags?: string[];
+      forceRefresh?: boolean;
+      backgroundRefresh?: boolean;
+    } = {}
+  ): Promise<T> {
+    // Check cache first unless force refresh
+    if (!options.forceRefresh) {
+      const cached = await this.get<T>(key);
+      if (cached !== null) {
+        // Schedule background refresh if requested
+        if (options.backgroundRefresh) {
+          this.syncManager.queueSync({
+            key,
+            operation: 'fetch',
+            url: '', // Would need to be provided
+            method: 'GET',
+            priority: 'low',
+            maxRetries: 3,
+          });
+        }
+        return cached;
+      }
+    }
+
+    // Use request deduplication
+    const existingRequest = this.requestDeduplication.get(key);
+    if (existingRequest) {
+      return existingRequest as Promise<T>;
+    }
+
+    // Fetch and cache data
+    const fetchPromise = fetchFn().then(async (data) => {
+      await this.set(key, data, {
+        ttl: options.ttl,
+        tags: options.tags,
+      });
+      return data;
+    }).finally(() => {
+      this.requestDeduplication.delete(key);
+    });
+
+    this.requestDeduplication.set(key, fetchPromise);
+    return fetchPromise;
+  }
+
+  /**
+   * Invalidate cache by tags
+   * 
+   * @param tags - Tags to invalidate
+   */
+  async invalidateByTags(tags: string[]): Promise<void> {
+    await this.cache.invalidateByTags(tags);
+  }
+
+  /**
+   * Invalidate cache by pattern
+   * 
+   * @param pattern - Pattern to match keys
+   */
+  async invalidateByPattern(pattern: RegExp): Promise<void> {
+    await this.cache.invalidateByPattern(pattern);
+  }
+
+  /**
+   * Invalidate cache by dependency
+   * 
+   * @param dependency - Dependency key
+   */
+  async invalidateByDependency(dependency: string): Promise<void> {
+    // Find all entries that depend on this key
+    const allKeys = [
+      ...(await this.cache.memoryAdapter.keys()),
+      ...(await this.cache.localStorageAdapter.keys()),
+    ];
+
+    for (const key of allKeys) {
+      const entry = await this.cache.get(key);
+      if (entry && entry.dependencies.includes(dependency)) {
+        await this.cache.delete(key);
+      }
+    }
+  }
+
+  // ===========================================================================
+  // Optimistic Updates
+  // ===========================================================================
+
+  /**
+   * Perform optimistic update
+   * 
+   * @param key - Cache key
+   * @param optimisticData - Optimistic data
+   * @param updateFn - Function to perform actual update
+   * @param config - Optimistic update configuration
+   */
+  async optimisticUpdate<T>(
+    key: string,
+    optimisticData: T,
+    updateFn: () => Promise<T>,
+    config: OptimisticUpdateConfig<T> = { enabled: true, updateKey: key, rollbackOnError: true }
+  ): Promise<T> {
+    if (!config.enabled) {
+      return updateFn();
+    }
+
+    // Store original data for rollback
+    const originalData = await this.get<T>(key);
+    const rollbackFn = async () => {
+      if (originalData !== null) {
+        await this.set(key, originalData);
+      } else {
+        await this.delete(key);
+      }
+    };
+
+    this.optimisticUpdates.set(key, { original: originalData, rollbackFn });
+
+    try {
+      // Apply optimistic update
+      const finalOptimisticData = typeof config.optimisticData === 'function'
+        ? config.optimisticData(originalData as T)
+        : optimisticData;
+      
+      await this.set(key, finalOptimisticData);
+
+      // Perform actual update
+      const result = await updateFn();
+      
+      // Update with real result
+      await this.set(key, result);
+      
+      // Clean up
+      this.optimisticUpdates.delete(key);
+      
+      return result;
+    } catch (error) {
+      // Rollback if configured
+      if (config.rollbackOnError) {
+        await rollbackFn();
+      }
+      
+      this.optimisticUpdates.delete(key);
+      throw error;
+    }
+  }
+
+  /**
+   * Rollback optimistic update
+   * 
+   * @param key - Cache key
+   */
+  async rollbackOptimisticUpdate(key: string): Promise<void> {
+    const update = this.optimisticUpdates.get(key);
+    if (update) {
+      await update.rollbackFn();
+      this.optimisticUpdates.delete(key);
+    }
+  }
+
+  // ===========================================================================
+  // Analytics and Monitoring
+  // ===========================================================================
+
+  /**
+   * Get cache statistics
+   */
+  async getStats(): Promise<CacheStats> {
+    return this.cache.getStats();
+  }
+
+  /**
+   * Get background sync status
+   */
+  getSyncStatus(): {
+    queueSize: number;
+    isProcessing: boolean;
+    highPriorityCount: number;
+    failedOperations: number;
+  } {
+    return this.syncManager.getQueueStatus();
+  }
+
+  /**
+   * Export cache data for debugging
+   */
+  async exportCache(): Promise<Record<string, unknown>> {
+    const memoryKeys = await this.cache.memoryAdapter.keys();
+    const localKeys = await this.cache.localStorageAdapter.keys();
+    const allKeys = [...new Set([...memoryKeys, ...localKeys])];
+
+    const data: Record<string, unknown> = {};
+    for (const key of allKeys) {
+      const entry = await this.cache.get(key);
+      if (entry) {
+        data[key] = {
+          data: entry.data,
+          metadata: entry.metadata,
+          timestamp: entry.timestamp,
+          ttl: entry.ttl,
+          tags: entry.tags,
+        };
+      }
+    }
+
+    return data;
+  }
+
+  // ===========================================================================
+  // Private Methods
+  // ===========================================================================
+
+  /**
+   * Start cleanup timer
+   */
+  private startCleanupTimer(): void {
+    this.cleanupTimer = setInterval(() => {
+      this.cache.cleanup();
+      this.cache.evict();
+    }, this.config.cleanupInterval);
+  }
+
+  /**
+   * Setup cross-tab synchronization
+   */
+  private setupCrossTabSync(): void {
+    if (!this.config.enableCrossTabSync || typeof window === 'undefined') {
+      return;
+    }
+
+    // Listen for storage events from other tabs
+    window.addEventListener('storage', (event) => {
+      if (event.key?.startsWith('api_cache_')) {
+        const cacheKey = event.key.substring('api_cache_'.length);
+        
+        // Invalidate memory cache when localStorage changes
+        if (event.newValue === null) {
+          // Entry was deleted
+          this.cache.memoryAdapter.delete(cacheKey);
+        } else if (event.newValue !== event.oldValue) {
+          // Entry was updated
+          this.cache.memoryAdapter.delete(cacheKey);
+        }
+      }
+    });
+  }
+
+  /**
+   * Cleanup resources
+   */
+  dispose(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    
+    this.requestDeduplication.clear();
+    this.optimisticUpdates.clear();
+  }
+}
+
+// Export singleton instance
+export const cacheService = new CacheService();
+
+// Export types and configurations
+export {
+  DEFAULT_CACHE_CONFIG,
+};
+
+export type {
+  CacheEntry,
+  CacheStats,
+  CacheServiceConfig,
+  SyncOperation,
+};

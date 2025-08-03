@@ -64,11 +64,14 @@ export function generateCSP(config: CSPConfig): string {
  * Get API URL for CSP configuration
  */
 function getApiUrlForCSP(): string {
-  const apiUrl = import.meta.env.VITE_API_URL || (
-    import.meta.env.DEV 
-      ? 'http://localhost:3000'
-      : 'https://api.example.com'
-  );
+  // Safely handle case where import.meta.env might not be available during build
+  let apiUrl: string;
+  try {
+    apiUrl = import.meta.env?.VITE_API_URL || 'http://localhost:8080';
+  } catch {
+    // Fallback for build-time errors
+    apiUrl = 'http://localhost:8080';
+  }
   
   try {
     const url = new URL(apiUrl);

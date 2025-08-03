@@ -10,10 +10,9 @@ from enum import Enum
 import structlog
 
 from ..core.config import get_settings
-from ..core.redis import redis_manager
+from ..core.redis import redis_manager, is_redis_initialized
 
 logger = structlog.get_logger()
-settings = get_settings()
 
 
 class CircuitState(Enum):
@@ -205,6 +204,10 @@ class CircuitBreaker:
     async def _persist_state(self):
         """Persist circuit breaker state to Redis."""
         try:
+            if not is_redis_initialized():
+                logger.debug("Circuit breaker state persistence skipped - Redis not initialized", name=self.name)
+                return
+                
             state_data = {
                 "state": self.state.state.value,
                 "failure_count": self.state.failure_count,
@@ -254,6 +257,8 @@ class CircuitBreakerManager:
     
     def __init__(self):
         self.breakers: Dict[str, CircuitBreaker] = {}
+        # Get settings dynamically when needed
+        settings = get_settings()
         self.default_config = CircuitBreakerConfig(
             failure_threshold=settings.circuit_breaker_failure_threshold,
             timeout=settings.circuit_breaker_timeout,

@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import os
-import logging
+import structlog
 from contextlib import asynccontextmanager
 
 from .core.config import settings
@@ -13,9 +13,7 @@ from .interfaces.event_interface import IEventBus
 from .events.event_bus_factory import EventBusFactory
 from .events.user_events import UserCreatedEvent
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 # Global event bus instance
 event_bus: IEventBus = None

@@ -22,6 +22,73 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Development stage  
+FROM python:3.11-slim as development
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=100
+
+# Install system dependencies and development tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Create and set working directory
+WORKDIR /app
+RUN mkdir -p /app/logs /tmp/prometheus_multiproc && \
+    chown -R appuser:appuser /app /tmp/prometheus_multiproc
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code (will be overridden by volume mounts in development)
+COPY --chown=appuser:appuser src/ /app/src/
+COPY --chown=appuser:appuser alembic/ /app/alembic/
+COPY --chown=appuser:appuser alembic.ini /app/
+
+# Create startup script for development
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Run database migrations if needed\n\
+if [ "$RUN_MIGRATIONS" = "true" ]; then\n\
+    echo "Running database migrations..."\n\
+    alembic upgrade head\n\
+fi\n\
+\n\
+# Start the application with reload for development\n\
+exec uvicorn src.main:app \\\n\
+    --host 0.0.0.0 \\\n\
+    --port ${PORT:-8000} \\\n\
+    --reload \\\n\
+    --log-level debug\n\
+' > /app/start-dev.sh && chmod +x /app/start-dev.sh
+
+# Switch to non-root user
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+
+# Expose ports
+EXPOSE 8000 8001
+
+# Set default command for development
+CMD ["/app/start-dev.sh"]
+
 # Production stage
 FROM python:3.11-slim as production
 

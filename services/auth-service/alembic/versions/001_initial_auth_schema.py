@@ -61,13 +61,13 @@ def upgrade() -> None:
         'GDPR_DATA_DELETE', 'HIPAA_ACCESS', 'SOC2_CONTROL_CHECK',
         name='auditeventtype'
     )
-    auditeventtype_enum.create(op.get_bind())
+    auditeventtype_enum.create(op.get_bind(), checkfirst=True)
     
     auditseverity_enum = sa.Enum(
         'LOW', 'MEDIUM', 'HIGH', 'CRITICAL',
         name='auditseverity'
     )
-    auditseverity_enum.create(op.get_bind())
+    auditseverity_enum.create(op.get_bind(), checkfirst=True)
     
     # Create permission table
     op.create_table(
@@ -362,5 +362,5 @@ def downgrade() -> None:
     op.drop_table('permission')
     
     # Drop enum types
-    sa.Enum(name='auditseverity').drop(op.get_bind())
-    sa.Enum(name='auditeventtype').drop(op.get_bind())
+    sa.Enum(name='auditseverity').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='auditeventtype').drop(op.get_bind(), checkfirst=True)

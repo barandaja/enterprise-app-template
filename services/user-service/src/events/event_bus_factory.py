@@ -5,13 +5,13 @@ Supports both in-memory and secure event bus implementations.
 
 import os
 from typing import Optional
-import logging
+import structlog
 
 from ..interfaces.event_interface import IEventBus
 from .event_bus import InMemoryEventBus
 from .secure_event_bus_adapter import SecureEventBusAdapter
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class EventBusFactory:

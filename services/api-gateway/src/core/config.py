@@ -3,7 +3,8 @@ Configuration settings for the API Gateway service.
 """
 from functools import lru_cache
 from typing import List, Dict, Any, Optional
-from pydantic import BaseSettings, validator
+from pydantic import field_validator, Field
+from pydantic_settings import BaseSettings
 import os
 
 
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     # Security settings
     secret_key: str = os.getenv("JWT_SECRET_KEY", "")
     allowed_hosts: List[str] = ["localhost", "127.0.0.1", "app.example.com", "www.example.com"]
-    cors_origins: List[str] = ["http://localhost:3000", "https://app.example.com", "https://www.example.com"]
+    cors_origins_str: str = Field(default="http://localhost:3000,http://localhost:8080", env="CORS_ORIGINS")
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire: int = 1800  # 30 minutes
     
@@ -106,7 +107,8 @@ class Settings(BaseSettings):
     docs_aggregation_enabled: bool = True
     docs_cache_ttl: int = 3600  # 1 hour
     
-    @validator("secret_key")
+    @field_validator("secret_key")
+    @classmethod
     def validate_secret_key(cls, v):
         if not v:
             raise ValueError("JWT_SECRET_KEY environment variable must be set")
@@ -114,26 +116,28 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
         return v
     
-    @validator("environment")
+    @field_validator("environment")
+    @classmethod
     def validate_environment(cls, v):
         allowed = ["development", "staging", "production"]
         if v not in allowed:
             raise ValueError(f"Environment must be one of: {allowed}")
         return v
     
-    @validator("cors_origins", pre=True)
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+    @property
+    def cors_origins(self) -> List[str]:
+        """Parse CORS origins from string."""
+        return [origin.strip() for origin in self.cors_origins_str.split(",")]
     
-    @validator("allowed_hosts", pre=True)
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
     def parse_allowed_hosts(cls, v):
         if isinstance(v, str):
             return [host.strip() for host in v.split(",")]
         return v
     
-    @validator("business_service_urls", pre=True)
+    @field_validator("business_service_urls", mode="before")
+    @classmethod
     def parse_business_service_urls(cls, v):
         if isinstance(v, str):
             services = {}
@@ -201,10 +205,12 @@ class Settings(BaseSettings):
         
         return registry
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore"
+    }
 
 
 @lru_cache()

@@ -10,7 +10,7 @@ from typing import Any, Optional, Union, Tuple
 from cryptography.fernet import Fernet, MultiFernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from sqlalchemy import TypeDecorator, String, Text
+from sqlalchemy import TypeDecorator, String, Text, Column
 from sqlalchemy.dialects.postgresql import BYTEA
 import structlog
 from ..core.config import settings
@@ -194,7 +194,9 @@ class EncryptedType(TypeDecorator):
     
     def __init__(self, *args, **kwargs):
         self.encryption_manager = encryption_manager
-        super().__init__(*args, **kwargs)
+        # TypeDecorator and its impl (BYTEA/LargeBinary) don't accept SQLAlchemy column arguments
+        # Only pass the positional args to avoid "unexpected keyword argument" errors
+        super().__init__(*args)
     
     def process_bind_param(self, value: Any, dialect) -> Optional[bytes]:
         """Encrypt value before storing in database."""
@@ -235,7 +237,9 @@ class EncryptedJSON(TypeDecorator):
     
     def __init__(self, *args, **kwargs):
         self.encryption_manager = encryption_manager
-        super().__init__(*args, **kwargs)
+        # TypeDecorator and its impl (BYTEA/LargeBinary) don't accept SQLAlchemy column arguments
+        # Only pass the positional args to avoid "unexpected keyword argument" errors
+        super().__init__(*args)
     
     def process_bind_param(self, value: Any, dialect) -> Optional[bytes]:
         """Encrypt JSON value before storing."""
@@ -253,25 +257,30 @@ class EncryptedJSON(TypeDecorator):
 
 
 # Convenience function for creating encrypted fields
-def EncryptedField(field_type: str = "string", **kwargs) -> Union[EncryptedString, EncryptedText, EncryptedJSON]:
+def EncryptedField(field_type: str = "string", **kwargs) -> Column:
     """
-    Factory function for creating encrypted fields.
+    Factory function for creating encrypted fields with proper SQLAlchemy Column support.
     
     Args:
         field_type: Type of field ("string", "text", "json")
-        **kwargs: Additional column arguments
+        **kwargs: SQLAlchemy column arguments (nullable, index, unique, etc.)
     
     Returns:
-        Appropriate encrypted field type
+        SQLAlchemy Column with appropriate encrypted type
     """
+    
+    # Determine the appropriate encrypted type
     if field_type == "string":
-        return EncryptedString(**kwargs)
+        encrypted_type = EncryptedString()
     elif field_type == "text":
-        return EncryptedText(**kwargs)
+        encrypted_type = EncryptedText()
     elif field_type == "json":
-        return EncryptedJSON(**kwargs)
+        encrypted_type = EncryptedJSON()
     else:
         raise ValueError(f"Unsupported encrypted field type: {field_type}")
+    
+    # Create and return a Column with the encrypted type and all provided kwargs
+    return Column(encrypted_type, **kwargs)
 
 
 class PIIFieldMixin:
