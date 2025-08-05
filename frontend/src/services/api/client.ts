@@ -64,14 +64,36 @@ class RequestDeduplicator {
     executor: () => Promise<AxiosResponse<T>>
   ): Promise<AxiosResponse<T>> {
     const key = this.generateKey(config);
+    console.log('[Deduplicator] Generated key:', key);
     
     if (this.pendingRequests.has(key)) {
+      console.log('[Deduplicator] Returning existing request for key:', key);
       return this.pendingRequests.get(key) as Promise<AxiosResponse<T>>;
     }
 
-    const promise = executor().finally(() => {
-      this.pendingRequests.delete(key);
-    });
+    console.log('[Deduplicator] Creating new request for key:', key);
+    const promise = executor()
+      .then(response => {
+        console.log('[Deduplicator] Request successful for key:', key);
+        return response;
+      })
+      .catch(error => {
+        console.error('[Deduplicator] Request error:', error);
+        console.error('[Deduplicator] Error type:', typeof error);
+        console.error('[Deduplicator] Error is undefined?', error === undefined);
+        console.error('[Deduplicator] Error is null?', error === null);
+        // Ensure we always throw a proper error object
+        if (error === undefined || error === null) {
+          const fallbackError = new Error('Request failed with undefined error');
+          console.error('[Deduplicator] Converting undefined error to proper Error object');
+          throw fallbackError;
+        }
+        throw error;
+      })
+      .finally(() => {
+        console.log('[Deduplicator] Removing key from pending requests:', key);
+        this.pendingRequests.delete(key);
+      });
 
     this.pendingRequests.set(key, promise);
     return promise;
@@ -168,17 +190,34 @@ class RetryManager {
     requestFn: () => Promise<AxiosResponse<T>>,
     config: RetryConfig
   ): Promise<AxiosResponse<T>> {
-    let lastError: ApiError;
+    console.log('[RetryManager] Starting executeWithRetry');
+    console.log('[RetryManager] Config:', config);
+    console.log('[RetryManager] Config attempts:', config.attempts);
     
-    for (let attempt = 1; attempt <= config.attempts; attempt++) {
+    // Ensure we have valid attempts
+    const maxAttempts = config.attempts || 1;
+    console.log('[RetryManager] Using maxAttempts:', maxAttempts);
+    
+    let lastError: ApiError | undefined;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await requestFn();
+        console.log(`[RetryManager] Attempt ${attempt}/${maxAttempts}`);
+        console.log('[RetryManager] Calling requestFn...');
+        const result = await requestFn();
+        console.log('[RetryManager] Request successful');
+        return result;
       } catch (error) {
+        console.log('[RetryManager] Caught error:', error, 'Type:', typeof error);
+        console.log('[RetryManager] Error is undefined?', error === undefined);
+        console.log('[RetryManager] Error is null?', error === null);
+        
         const apiError = this.transformError(error);
         lastError = apiError;
         
         // Don't retry if condition is not met or it's the last attempt
         if (!config.retryCondition?.(apiError) || attempt === config.attempts) {
+          console.log('[RetryManager] Not retrying - condition not met or last attempt');
           break;
         }
         
@@ -187,10 +226,15 @@ class RetryManager {
         
         // Wait before retry
         const delay = this.calculateDelay(attempt, config);
+        console.log(`[RetryManager] Waiting ${delay}ms before retry`);
         await this.sleep(delay);
       }
     }
     
+    console.log('[RetryManager] All attempts failed, throwing last error:', lastError);
+    if (!lastError) {
+      lastError = new ApiError('Request failed after all retry attempts', ApiErrorCode.INTERNAL_ERROR);
+    }
     throw lastError;
   }
 
@@ -198,6 +242,15 @@ class RetryManager {
    * Transform error to ApiError
    */
   private transformError(error: unknown): ApiError {
+    // Handle undefined/null errors explicitly
+    if (error === undefined || error === null) {
+      console.error('[RetryManager] Received undefined/null error, creating fallback');
+      return new ApiError(
+        'Request failed with undefined error',
+        ApiErrorCode.INTERNAL_ERROR
+      );
+    }
+    
     if (error instanceof ApiError) {
       return error;
     }
@@ -407,11 +460,45 @@ class MiddlewareManager {
     
     const next = async (): Promise<AxiosResponse> => {
       if (index >= middleware.length) {
-        return finalHandler();
+        console.log('[MiddlewareManager] Calling final handler');
+        try {
+          const result = await finalHandler();
+          console.log('[MiddlewareManager] Final handler success');
+          return result;
+        } catch (error) {
+          console.error('[MiddlewareManager] Final handler error:', error);
+          console.error('[MiddlewareManager] Error type:', typeof error);
+          console.error('[MiddlewareManager] Error details:', {
+            error,
+            isError: error instanceof Error,
+            message: error instanceof Error ? error.message : 'No message',
+            stack: error instanceof Error ? error.stack : 'No stack'
+          });
+          // Ensure we always throw a proper error object
+          if (error === undefined || error === null) {
+            const fallbackError = new Error('Final handler failed with undefined error');
+            console.error('[MiddlewareManager] Converting undefined error to proper Error object');
+            throw fallbackError;
+          }
+          throw error;
+        }
       }
       
       const currentMiddleware = middleware[index++];
-      return currentMiddleware(context, next);
+      console.log(`[MiddlewareManager] Executing middleware ${index}/${middleware.length}`);
+      try {
+        return await currentMiddleware(context, next);
+      } catch (error) {
+        console.error(`[MiddlewareManager] Middleware ${index} threw error:`, error);
+        console.error(`[MiddlewareManager] Middleware error type:`, typeof error);
+        // Ensure middleware errors are proper error objects
+        if (error === undefined || error === null) {
+          const fallbackError = new Error(`Middleware ${index} failed with undefined error`);
+          console.error('[MiddlewareManager] Converting middleware undefined error to proper Error object');
+          throw fallbackError;
+        }
+        throw error;
+      }
     };
     
     return next();
@@ -442,16 +529,24 @@ export class ApiClient implements TypedApiMethods {
     this.middlewareManager = new MiddlewareManager();
     this.cacheService = cacheService;
 
-    this.axiosInstance = axios.create({
+    console.log('[ApiClient] Creating axios instance with config:', {
       baseURL: this.config.baseURL,
       timeout: this.config.timeout,
       headers: this.config.headers,
+      withCredentials: this.config.withCredentials
+    });
+    
+    this.axiosInstance = axios.create({
+      baseURL: this.config.baseURL,
+      timeout: this.config.timeout,
+      headers: this.config.headers || {},
       withCredentials: this.config.withCredentials,
       validateStatus: this.config.validateStatus,
       maxContentLength: this.config.maxContentLength,
       maxBodyLength: this.config.maxBodyLength,
     });
 
+    // Re-enable interceptors
     this.setupInterceptors();
   }
 
@@ -462,13 +557,40 @@ export class ApiClient implements TypedApiMethods {
     // Rate limiting interceptor
     const rateLimitInterceptor = createRateLimitInterceptor();
     this.axiosInstance.interceptors.request.use(
-      (config) => rateLimitInterceptor.request(config).then(() => config),
-      (error) => Promise.reject(error)
+      async (config) => {
+        console.log('[ApiClient] Rate limiter interceptor - before');
+        try {
+          // Ensure config has headers object
+          if (!config.headers) {
+            config.headers = {} as any;
+          }
+          // Wrap in Promise.resolve to ensure consistent async behavior
+          const result = await Promise.resolve(rateLimitInterceptor.request(config));
+          console.log('[ApiClient] Rate limiter interceptor - result:', result);
+          return result;
+        } catch (error) {
+          console.error('[ApiClient] Rate limiter interceptor threw error:', error);
+          return Promise.reject(error);
+        }
+      },
+      (error) => {
+        console.error('[ApiClient] Rate limiter interceptor error handler:', error);
+        return Promise.reject(error);
+      }
     );
 
     // Request interceptor
     this.axiosInstance.interceptors.request.use(
-      (config) => this.handleRequest(config),
+      async (config) => {
+        console.log('[ApiClient] Main request interceptor - before handleRequest');
+        const result = await this.handleRequest(config);
+        console.log('[ApiClient] Main request interceptor - after handleRequest');
+        if (!result) {
+          console.error('[ApiClient] handleRequest returned undefined!');
+          throw new Error('handleRequest returned undefined');
+        }
+        return result;
+      },
       (error) => this.handleRequestError(error)
     );
 
@@ -493,19 +615,32 @@ export class ApiClient implements TypedApiMethods {
    * Handle outgoing requests
    */
   private async handleRequest(config: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> {
+    console.log('[handleRequest] Starting request processing:', config.url);
+    
+    // Ensure headers object exists
+    if (!config.headers) {
+      config.headers = {} as any;
+    }
+    
     // Add authentication header if not skipped
-    if (!config.skipAuth) {
+    if (!(config as any).skipAuth) {
       try {
+        console.log('[handleRequest] Getting auth token');
         // Get valid token from TokenManager (handles refresh if needed)
         const token = await tokenManager.getValidToken();
         config.headers.Authorization = `Bearer ${token}`;
+        console.log('[handleRequest] Added auth header');
       } catch (error) {
+        console.log('[handleRequest] No valid token available:', error);
         // No valid token available, proceed without auth header
         this.logger.logError(error);
       }
+    } else {
+      console.log('[handleRequest] Skipping auth');
     }
 
     // Add CSRF token for state-changing requests
+    console.log('[handleRequest] Adding CSRF token');
     config.headers = addCSRFToken(
       config.headers as Record<string, string>,
       config.url || '',
@@ -515,16 +650,19 @@ export class ApiClient implements TypedApiMethods {
     // Add request ID for tracking
     const requestId = crypto.randomUUID();
     config.headers['X-Request-ID'] = requestId;
+    console.log('[handleRequest] Added request ID:', requestId);
 
     // Add abort signal if not present
     if (!config.signal && config.cancelKey) {
       const controller = this.cancellation.createController(config.cancelKey);
       config.signal = controller.signal;
+      console.log('[handleRequest] Added abort signal');
     }
 
     // Log request
     this.logger.logRequest(config);
 
+    console.log('[handleRequest] Request processing complete');
     return config;
   }
 
@@ -587,17 +725,55 @@ export class ApiClient implements TypedApiMethods {
    * Create ApiError from AxiosError
    */
   private createApiError(error: AxiosError): ApiError {
+    // Safety check for error object
+    if (!error || typeof error !== 'object') {
+      return new ApiError(
+        'An unexpected error occurred',
+        ApiErrorCode.NETWORK_ERROR,
+        0
+      );
+    }
+    
     const response = error.response;
     
+    // Handle case where response exists and has error data
     if (response?.data && typeof response.data === 'object') {
       const errorData = response.data as ApiErrorResponse;
       return ApiError.fromResponse(response as AxiosResponse<ApiErrorResponse>);
     }
 
+    // Determine error code based on error type
+    let errorCode = ApiErrorCode.NETWORK_ERROR;
+    let statusCode = 0;
+    
+    if (response) {
+      // Server responded with error status
+      statusCode = response.status;
+      const statusCodeMap: Record<number, ApiErrorCode> = {
+        400: ApiErrorCode.VALIDATION_ERROR,
+        401: ApiErrorCode.UNAUTHORIZED,
+        403: ApiErrorCode.FORBIDDEN,
+        404: ApiErrorCode.NOT_FOUND,
+        409: ApiErrorCode.CONFLICT,
+        429: ApiErrorCode.RATE_LIMITED,
+        500: ApiErrorCode.INTERNAL_ERROR,
+        502: ApiErrorCode.SERVICE_UNAVAILABLE,
+        503: ApiErrorCode.SERVICE_UNAVAILABLE,
+        504: ApiErrorCode.TIMEOUT,
+      };
+      errorCode = statusCodeMap[statusCode] || ApiErrorCode.INTERNAL_ERROR;
+    } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      // Network connection errors
+      errorCode = ApiErrorCode.CONNECTION_ERROR;
+    } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      // Timeout errors
+      errorCode = ApiErrorCode.TIMEOUT;
+    }
+
     return new ApiError(
-      error.message,
-      ApiErrorCode.NETWORK_ERROR,
-      response?.status || 0,
+      error.message || 'An unexpected error occurred',
+      errorCode,
+      statusCode,
       undefined,
       undefined,
       response
@@ -650,11 +826,60 @@ export class ApiClient implements TypedApiMethods {
         client: this,
       };
 
-      const response = await this.middlewareManager.execute(
-        middleware,
-        context,
-        () => this.executeRequestWithRetry(config)
-      );
+      // Ensure config has headers object
+      if (!config.headers) {
+        config.headers = {};
+      }
+      
+      let response;
+      try {
+        // Execute all requests through middleware pipeline
+        const finalHandler = async () => {
+          console.log('[finalHandler] Called for:', config.url);
+          console.log('[finalHandler] Config:', {
+            method: config.method,
+            url: config.url,
+            hasData: !!config.data,
+            headers: Object.keys(config.headers || {})
+          });
+          try {
+            const result = await this.executeRequestWithRetry(config);
+            console.log('[finalHandler] Success, response status:', result?.status);
+            return result;
+          } catch (error) {
+            console.error('[finalHandler] Error caught:', error);
+            console.error('[finalHandler] Error type:', typeof error);
+            console.error('[finalHandler] Error is undefined?', error === undefined);
+            console.error('[finalHandler] Error is null?', error === null);
+            // Never throw undefined
+            if (error === undefined || error === null) {
+              const fallbackError = new Error('executeRequestWithRetry failed with undefined error');
+              console.error('[finalHandler] Creating fallback error');
+              throw fallbackError;
+            }
+            throw error;
+          }
+        };
+        
+        console.log(`[ApiClient] Executing middleware pipeline for ${config.method} ${config.url}`);
+        console.log('[ApiClient] Middleware count:', middleware.length);
+        
+        response = await this.middlewareManager.execute(
+          middleware,
+          context,
+          finalHandler
+        );
+      } catch (middlewareError) {
+        console.error('[ApiClient] Middleware pipeline failed:', middlewareError);
+        console.error('[ApiClient] Middleware error type:', typeof middlewareError);
+        // Ensure we never throw undefined
+        if (middlewareError === undefined || middlewareError === null) {
+          const fallbackError = new Error('Middleware pipeline failed with undefined error');
+          console.error('[ApiClient] Creating fallback error for undefined middleware error');
+          throw fallbackError;
+        }
+        throw middlewareError;
+      }
 
       // Cache successful responses
       if (config.cache?.enabled && response.status >= 200 && response.status < 300) {
@@ -689,6 +914,34 @@ export class ApiClient implements TypedApiMethods {
       if (error instanceof ApiError) {
         throw error;
       }
+      
+      // Handle undefined/null errors explicitly
+      if (error === undefined || error === null) {
+        console.error('Unexpected undefined/null error in executeRequest');
+        throw new ApiError(
+          'Request failed with undefined error',
+          ApiErrorCode.NETWORK_ERROR,
+          0
+        );
+      }
+      
+      // Check if error is actually an AxiosError
+      if (typeof error !== 'object' || !('isAxiosError' in error)) {
+        console.error('Unexpected error type:', error);
+        console.error('Error details:', {
+          error,
+          type: typeof error,
+          isError: error instanceof Error,
+          message: error instanceof Error ? error.message : 'No message',
+          stack: error instanceof Error ? error.stack : 'No stack'
+        });
+        throw new ApiError(
+          error instanceof Error ? error.message : 'An unexpected error occurred',
+          ApiErrorCode.NETWORK_ERROR,
+          0
+        );
+      }
+      
       throw this.createApiError(error as AxiosError);
     }
   }
@@ -699,16 +952,101 @@ export class ApiClient implements TypedApiMethods {
   private async executeRequestWithRetry<T>(
     config: InternalAxiosRequestConfig & ApiRequestConfig
   ): Promise<AxiosResponse<T>> {
+    // Ensure config has all required axios properties
+    const axiosConfig: InternalAxiosRequestConfig = {
+      ...config,
+      headers: config.headers || {},
+    };
+    
+    console.log('[executeRequestWithRetry] Starting request:', {
+      method: axiosConfig.method,
+      url: axiosConfig.url,
+      hasData: !!axiosConfig.data,
+      headers: Object.keys(axiosConfig.headers || {})
+    });
+    
     const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+    console.log('[executeRequestWithRetry] Retry config:', retryConfig);
     
     const requestFn = async (): Promise<AxiosResponse<T>> => {
-      if (config.deduplication !== false) {
-        return this.deduplicator.deduplicate(config, () => this.axiosInstance(config));
+      console.log('[requestFn] Called!');
+      try {
+        let response;
+        // Temporarily disable deduplicator to debug
+        // if (config.deduplication !== false) {
+        //   console.log('[executeRequestWithRetry] Using deduplicator');
+        //   response = await this.deduplicator.deduplicate(config, () => this.axiosInstance(config));
+        // } else {
+          console.log('[executeRequestWithRetry] Direct axios call with config:', {
+            method: axiosConfig.method,
+            url: axiosConfig.url,
+            baseURL: axiosConfig.baseURL,
+            hasHeaders: !!axiosConfig.headers,
+            headerKeys: Object.keys(axiosConfig.headers || {}),
+            hasData: !!axiosConfig.data
+          });
+          
+          try {
+            response = await this.axiosInstance(axiosConfig);
+          } catch (axiosError) {
+            console.error('[executeRequestWithRetry] Axios threw error:', axiosError);
+            console.error('[executeRequestWithRetry] Axios error is undefined?', axiosError === undefined);
+            console.error('[executeRequestWithRetry] Axios error is null?', axiosError === null);
+            console.error('[executeRequestWithRetry] Axios error type:', typeof axiosError);
+            
+            if (axiosError && typeof axiosError === 'object') {
+              console.error('[executeRequestWithRetry] Axios error details:', {
+                message: axiosError.message,
+                code: axiosError.code,
+                response: axiosError.response,
+                request: axiosError.request,
+                isAxiosError: axiosError.isAxiosError
+              });
+            }
+            
+            // Make sure we never throw undefined
+            if (axiosError === undefined || axiosError === null) {
+              throw new Error('Axios request failed with undefined error');
+            }
+            
+            throw axiosError;
+          }
+        // }
+        console.log('[executeRequestWithRetry] Request successful:', {
+          url: config.url,
+          method: config.method,
+          status: response?.status,
+          hasData: !!response?.data
+        });
+        return response;
+      } catch (error) {
+        console.error('[executeRequestWithRetry] Request failed:', {
+          url: config.url,
+          method: config.method,
+          error,
+          isUndefined: error === undefined,
+          isNull: error === null,
+          errorType: typeof error,
+          errorMessage: error instanceof Error ? error.message : 'Unknown error'
+        });
+        // Ensure we never throw undefined
+        if (error === undefined || error === null) {
+          const fallbackError = new Error(`Request failed: ${config.method} ${config.url}`);
+          console.error('[executeRequestWithRetry] Converting undefined error to proper Error object');
+          throw fallbackError;
+        }
+        throw error;
       }
-      return this.axiosInstance(config);
     };
 
-    return this.retryManager.executeWithRetry(requestFn, retryConfig);
+    try {
+      const result = await this.retryManager.executeWithRetry(requestFn, retryConfig);
+      console.log('[executeRequestWithRetry] RetryManager returned successfully');
+      return result;
+    } catch (error) {
+      console.error('[executeRequestWithRetry] RetryManager threw error:', error);
+      throw error;
+    }
   }
 
   // =============================================================================
@@ -769,6 +1107,9 @@ export class ApiClient implements TypedApiMethods {
       method: 'POST',
       url,
       data,
+      headers: {
+        ...config.headers,
+      },
     });
   }
 

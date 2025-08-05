@@ -268,12 +268,18 @@ export function createRateLimitInterceptor() {
       const result = rateLimiter.recordAttempt(rateLimitConfig);
       
       if (!result.allowed) {
-        return Promise.reject(new RateLimitError(
+        console.log('[RateLimiter] Request blocked:', {
+          url: config.url,
+          retriesAfter: result.retriesAfter
+        });
+        // Don't return Promise.reject, just throw the error
+        throw new RateLimitError(
           `Rate limit exceeded. Please try again in ${result.retriesAfter} seconds.`,
           result.retriesAfter
-        ));
+        );
       }
       
+      console.log('[RateLimiter] Request allowed:', config.url);
       return config;
     },
     

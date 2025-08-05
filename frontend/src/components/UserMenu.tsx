@@ -41,8 +41,17 @@ export function UserMenu({ user, className }: UserMenuProps) {
     setIsOpen(false);
   };
 
-  const getInitials = (firstName: string, lastName: string) => {
-    return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+  const getInitials = (firstName?: string, lastName?: string, email?: string) => {
+    if (firstName && lastName) {
+      return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+    }
+    if (firstName) {
+      return firstName.charAt(0).toUpperCase();
+    }
+    if (email) {
+      return email.charAt(0).toUpperCase();
+    }
+    return 'U';
   };
 
   // Role-based menu items
@@ -64,16 +73,16 @@ export function UserMenu({ user, className }: UserMenuProps) {
         {user.avatar ? (
           <img
             src={user.avatar}
-            alt={`${user.firstName} ${user.lastName}`}
+            alt={`${user.firstName || ''} ${user.lastName || ''}`}
             className="h-6 w-6 rounded-full object-cover"
           />
         ) : (
           <div className="h-6 w-6 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-medium">
-            {getInitials(user.firstName, user.lastName)}
+            {getInitials(user.firstName, user.lastName, user.email)}
           </div>
         )}
         <span className="hidden sm:block text-sm font-medium truncate max-w-32">
-          {user.firstName}
+          {user.firstName || user.email?.split('@')[0] || 'User'}
         </span>
         <ChevronDown 
           className={cn(
@@ -97,17 +106,17 @@ export function UserMenu({ user, className }: UserMenuProps) {
               {user.avatar ? (
                 <img
                   src={user.avatar}
-                  alt={`${user.firstName} ${user.lastName}`}
+                  alt={`${user.firstName || ''} ${user.lastName || ''}`}
                   className="h-10 w-10 rounded-full object-cover"
                 />
               ) : (
                 <div className="h-10 w-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-sm font-medium">
-                  {getInitials(user.firstName, user.lastName)}
+                  {getInitials(user.firstName, user.lastName, user.email)}
                 </div>
               )}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-foreground truncate">
-                  {user.firstName} {user.lastName}
+                  {user.firstName || user.email?.split('@')[0] || 'User'} {user.lastName || ''}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">
                   {user.email}

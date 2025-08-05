@@ -159,7 +159,10 @@ export class SecureStorage {
 
       return JSON.parse(decrypted) as T;
     } catch (error) {
-      console.error('SecureStorage: Failed to retrieve item', error);
+      // Only log errors that aren't related to missing items
+      if (item && error instanceof Error && !error.message.includes('OperationError')) {
+        console.error('SecureStorage: Failed to retrieve item', error);
+      }
       return null;
     }
   }

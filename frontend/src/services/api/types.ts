@@ -919,10 +919,14 @@ export interface ApiClientConfig {
 /**
  * Default API client configuration
  */
+// Debug environment variable
+console.log('[API Config] VITE_API_URL:', import.meta.env.VITE_API_URL);
+console.log('[API Config] DEV mode:', import.meta.env.DEV);
+
 export const DEFAULT_API_CONFIG: ApiClientConfig = {
   baseURL: import.meta.env.VITE_API_URL || (
     import.meta.env.DEV 
-      ? 'http://localhost:3000/api/v1'  // Development default
+      ? 'http://localhost:8000/api/v1'  // Development default - updated to correct port
       : 'https://api.example.com/api/v1' // Production default (should be overridden)
   ),
   timeout: 30000,

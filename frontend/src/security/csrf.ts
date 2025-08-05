@@ -112,7 +112,14 @@ class CSRFTokenManager {
     // SECURITY: Never generate tokens client-side
     // Server must always provide CSRF token
     // In development mode, return empty string to prevent errors while maintaining security awareness
-    if (process.env.NODE_ENV === 'development') {
+    // Check for development mode more robustly
+    const isDevelopment = process.env.NODE_ENV === 'development' || 
+                         process.env.NODE_ENV === 'dev' ||
+                         !process.env.NODE_ENV ||
+                         window.location.hostname === 'localhost' ||
+                         window.location.hostname === '127.0.0.1';
+    
+    if (isDevelopment) {
       // Only log once to avoid console spam
       if (!CSRFTokenManager.hasLoggedDevWarning) {
         console.info('CSRF: Running in development mode without server-provided token. This is expected for local development.');
@@ -147,7 +154,13 @@ class CSRFTokenManager {
   refreshToken(): void {
     // SECURITY: Token refresh must be done server-side
     // Client should request new token from server
-    if (process.env.NODE_ENV === 'development') {
+    const isDevelopment = process.env.NODE_ENV === 'development' || 
+                         process.env.NODE_ENV === 'dev' ||
+                         !process.env.NODE_ENV ||
+                         window.location.hostname === 'localhost' ||
+                         window.location.hostname === '127.0.0.1';
+    
+    if (isDevelopment) {
       // In development, skip refresh since we don't have a CSRF endpoint
       console.debug('CSRF: Token refresh skipped in development mode');
       return;
@@ -162,7 +175,13 @@ class CSRFTokenManager {
     const currentToken = this.getToken();
     
     // In development mode with empty token, skip validation but log warning
-    if (process.env.NODE_ENV === 'development' && !currentToken) {
+    const isDevelopment = process.env.NODE_ENV === 'development' || 
+                         process.env.NODE_ENV === 'dev' ||
+                         !process.env.NODE_ENV ||
+                         window.location.hostname === 'localhost' ||
+                         window.location.hostname === '127.0.0.1';
+    
+    if (isDevelopment && !currentToken) {
       console.warn('CSRF token validation skipped in development mode - no token available');
       return true;
     }

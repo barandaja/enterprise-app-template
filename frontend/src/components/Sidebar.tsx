@@ -291,17 +291,17 @@ export function Sidebar({ className }: SidebarProps) {
                   {user.avatar ? (
                     <img
                       src={user.avatar}
-                      alt={`${user.firstName} ${user.lastName}`}
+                      alt={`${user.firstName || ''} ${user.lastName || ''}`}
                       className="h-8 w-8 rounded-full object-cover"
                     />
                   ) : (
                     <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-sm font-medium">
-                      {user.firstName.charAt(0)}{user.lastName.charAt(0)}
+                      {user.firstName?.charAt(0) || user.email?.charAt(0) || 'U'}{user.lastName?.charAt(0) || ''}
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">
-                      {user.firstName} {user.lastName}
+                      {user.firstName || ''} {user.lastName || ''}
                     </p>
                     <p className="text-xs text-muted-foreground truncate">
                       {user.email}
@@ -327,12 +327,12 @@ export function Sidebar({ className }: SidebarProps) {
                   {user.avatar ? (
                     <img
                       src={user.avatar}
-                      alt={`${user.firstName} ${user.lastName}`}
+                      alt={`${user.firstName || ''} ${user.lastName || ''}`}
                       className="h-8 w-8 rounded-full object-cover"
                     />
                   ) : (
                     <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-sm font-medium">
-                      {user.firstName.charAt(0)}{user.lastName.charAt(0)}
+                      {user.firstName?.charAt(0) || user.email?.charAt(0) || 'U'}{user.lastName?.charAt(0) || ''}
                     </div>
                   )}
                   

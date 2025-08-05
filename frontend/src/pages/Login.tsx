@@ -79,16 +79,19 @@ function Login({ className }: PageProps) {
   }, [successMessage]);
 
   const onSubmit = async (data: LoginFormData) => {
+    console.log('Login form onSubmit called with data:', { email: data.email, hasPassword: !!data.password });
     setLoginError(null);
     
     try {
       // Additional client-side email validation
       const emailValidation = validateEmail(data.email);
-      if (!emailValidation.isValid) {
-        setLoginError(emailValidation.error);
+      if (!emailValidation.valid) {
+        console.error('Email validation failed:', emailValidation.error);
+        setLoginError(emailValidation.error || 'Invalid email address');
         return;
       }
       
+      console.log('Attempting login...');
       await login({
         email: data.email.toLowerCase().trim(),
         password: data.password,
@@ -101,6 +104,7 @@ function Login({ className }: PageProps) {
         localStorage.removeItem('rememberMe');
       }
       
+      console.log('Login successful!');
       toast.success('Welcome back!');
       
       // Navigate to intended destination or dashboard

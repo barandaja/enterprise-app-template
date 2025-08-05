@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { useShallow } from 'zustand/react/shallow';
 import type { Theme } from '../types';
 
 // Extended theme state interface
@@ -279,20 +280,20 @@ export const useSystemTheme = () => useThemeStore((state) => state.systemTheme);
 export const useThemeInitialized = () => useThemeStore((state) => state.isInitialized);
 
 // Theme actions selectors
-export const useThemeActions = () => useThemeStore((state) => ({
+export const useThemeActions = () => useThemeStore(useShallow((state) => ({
   setTheme: state.setTheme,
   toggleTheme: state.toggleTheme,
   initialize: state.initialize,
-}));
+})));
 
 // Hook for complete theme state
-export const useThemeState = () => useThemeStore((state) => ({
+export const useThemeState = () => useThemeStore(useShallow((state) => ({
   theme: state.theme,
   systemTheme: state.systemTheme,
   resolvedTheme: state.resolvedTheme,
   isInitialized: state.isInitialized,
   isSystemPreferenceSupported: state.isSystemPreferenceSupported,
-}));
+})));
 
 // Hook for theme with actions (convenience hook)
 export const useThemeWithActions = () => {

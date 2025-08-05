@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { useShallow } from 'zustand/react/shallow';
 import type { LoadingState } from '../types';
 
 // Toast/Notification types
@@ -543,7 +544,7 @@ export const useIsOffline = () => useUIStore((state) => state.isOffline);
 export const useViewport = () => useUIStore((state) => state.viewport);
 
 // Action selectors
-export const useUIActions = () => useUIStore((state) => ({
+export const useUIActions = () => useUIStore(useShallow((state) => ({
   // Loading
   addLoading: state.addLoading,
   removeLoading: state.removeLoading,
@@ -574,7 +575,7 @@ export const useUIActions = () => useUIStore((state) => ({
   // Focus
   setFocusTrap: state.setFocusTrap,
   restoreFocus: state.restoreFocus,
-}));
+})));
 
 // Utility hooks
 export const useLoadingState = (loadingId?: string) => {

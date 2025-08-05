@@ -605,59 +605,72 @@ export const commonMiddleware = {
   /**
    * Request logging middleware
    */
-  requestLogger: (context: MiddlewareContext, next: () => Promise<any>) => {
+  requestLogger: async (context: MiddlewareContext, next: () => Promise<any>) => {
     const start = Date.now();
     console.log(`🚀 ${context.request.method?.toUpperCase()} ${context.request.url}`);
     
-    return next().then((response) => {
+    try {
+      const response = await next();
       const duration = Date.now() - start;
       console.log(`✅ ${context.request.method?.toUpperCase()} ${context.request.url} - ${response.status} (${duration}ms)`);
       return response;
-    }).catch((error) => {
+    } catch (error) {
       const duration = Date.now() - start;
       console.error(`❌ ${context.request.method?.toUpperCase()} ${context.request.url} - Error (${duration}ms):`, error);
+      // Make sure we're throwing a proper error
+      if (error === undefined || error === null) {
+        throw new Error('Unknown error occurred during request');
+      }
       throw error;
-    });
+    }
   },
 
   /**
    * Performance monitoring middleware
    */
-  performanceMonitor: (threshold = 1000) => (context: MiddlewareContext, next: () => Promise<any>) => {
+  performanceMonitor: (threshold = 1000) => async (context: MiddlewareContext, next: () => Promise<any>) => {
     const start = Date.now();
     
-    return next().then((response) => {
+    try {
+      const response = await next();
       const duration = Date.now() - start;
       if (duration > threshold) {
         console.warn(`🐌 Slow request detected: ${context.request.method?.toUpperCase()} ${context.request.url} took ${duration}ms`);
       }
       return response;
-    });
+    } catch (error) {
+      throw error;
+    }
   },
 
   /**
    * Error handling middleware
    */
-  errorHandler: (context: MiddlewareContext, next: () => Promise<any>) => {
-    return next().catch((error) => {
+  errorHandler: async (context: MiddlewareContext, next: () => Promise<any>) => {
+    try {
+      return await next();
+    } catch (error) {
       // Add context to error
       if (error instanceof Error) {
         error.message = `[${context.request.method?.toUpperCase()} ${context.request.url}] ${error.message}`;
       }
       throw error;
-    });
+    }
   },
 
   /**
    * Response transformation middleware
    */
-  responseTransformer: <T>(transformer: (data: any) => T) => (context: MiddlewareContext, next: () => Promise<any>) => {
-    return next().then((response) => {
+  responseTransformer: <T>(transformer: (data: any) => T) => async (context: MiddlewareContext, next: () => Promise<any>) => {
+    try {
+      const response = await next();
       if (response.data) {
         response.data = transformer(response.data);
       }
       return response;
-    });
+    } catch (error) {
+      throw error;
+    }
   },
 };
 

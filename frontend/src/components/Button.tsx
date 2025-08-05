@@ -65,6 +65,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     rightIcon,
     disabled,
     children,
+    asChild,
     ...props 
   }, ref) => {
     const isDisabled = disabled || loading;

@@ -408,22 +408,28 @@ export const useAuthStore = create<AuthStore>()(
 
           try {
             const response = await authApi.login(credentials);
+            
             if (!response.success) {
               throw new ApiError(response.message, response.code);
             }
 
-            const { user, tokens } = response.data;
+            // Log the actual response to see its structure
+            console.log('[authStore] Login response:', response);
+            console.log('[authStore] Response data:', response.data);
+            
+            // The actual API response has access_token, refresh_token, and user at the top level
+            const { user, access_token, refresh_token } = response.data;
 
             // Store tokens using TokenManager
             await tokenManager.setTokens({
-              accessToken: tokens.accessToken,
-              refreshToken: tokens.refreshToken
+              accessToken: access_token,
+              refreshToken: refresh_token
             });
             
             set((state) => {
               state.user = user;
-              state.token = tokens.accessToken;
-              state.refreshToken = tokens.refreshToken;
+              state.token = access_token;
+              state.refreshToken = refresh_token;
               state.isAuthenticated = true;
               state.isLoading = false;
               state.error = null;

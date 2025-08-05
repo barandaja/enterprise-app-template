@@ -60,16 +60,19 @@ fix_*.py
 simple_test.py
 run_debug.py
 
-# Documentation drafts
+# Temporary investigation files
 *_ISSUE_*.md
 *_FIX_*.md
 *_ERROR_*.md
 *_RESOLUTION.md
 *_IMPLEMENTATION.md
-BACKEND_AUTH_ISSUE.md
-Claude.md
+*_ANALYSIS.md
 frontend/icon-test.html
 frontend/registration-errors-analysis.md
+
+# Development session artifacts (consider committing if they contain valuable documentation)
+BACKEND_AUTH_ISSUE.md
+Claude.md
 
 # Cache files
 *.pyc

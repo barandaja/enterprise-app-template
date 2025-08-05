@@ -68,13 +68,10 @@ export function RateLimitedButton({
         // If custom onClick is provided, call it and let it handle preventDefault if needed
         await onClick(e);
       } else if (type === 'submit') {
-        // For submit buttons without custom onClick, trigger form submission
-        // Don't prevent default - let the browser handle form submission
-        const form = e.currentTarget.form;
-        if (form) {
-          // The form submission will happen naturally via the browser's default behavior
-          // since we're not calling preventDefault()
-        }
+        // For submit buttons without custom onClick, let the form handle submission
+        // Don't prevent default - let React Hook Form's handleSubmit handle it
+        // The form submission will happen via React Hook Form's onSubmit handler
+        console.debug('RateLimitedButton: Allowing form submission for submit button');
       }
     },
     [checkLimit, onClick, onRateLimitExceeded, type]
