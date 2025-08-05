@@ -2,7 +2,7 @@
 User session model for secure session management with Redis backing.
 Implements comprehensive session tracking and security features.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, Index
 from sqlalchemy.orm import relationship
@@ -38,8 +38,8 @@ class UserSession(BaseModel):
     location_data = EncryptedField("json", nullable=True)  # GeoIP data
     
     # Session lifecycle
-    started_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    last_activity_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_activity_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     
@@ -82,7 +82,7 @@ class UserSession(BaseModel):
         refresh_token_id = secrets.token_urlsafe(32)
         
         lifetime = session_lifetime or settings.SESSION_LIFETIME_SECONDS
-        expires_at = datetime.utcnow() + timedelta(seconds=lifetime)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=lifetime)
         
         # Detect if mobile device
         is_mobile = False
@@ -156,7 +156,7 @@ class UserSession(BaseModel):
         """Clean up expired sessions."""
         expired_sessions = await db.execute(
             select(cls).where(
-                cls.expires_at < datetime.utcnow(),
+                cls.expires_at < datetime.now(timezone.utc),
                 cls.is_active == True
             )
         )
@@ -171,7 +171,7 @@ class UserSession(BaseModel):
     
     async def update_activity(self, db: AsyncSession) -> None:
         """Update last activity timestamp."""
-        self.last_activity_at = datetime.utcnow()
+        self.last_activity_at = datetime.now(timezone.utc)
         await self.save(db)
     
     async def extend_session(
@@ -183,7 +183,7 @@ class UserSession(BaseModel):
         if additional_seconds is None:
             additional_seconds = settings.SESSION_LIFETIME_SECONDS
         
-        self.expires_at = datetime.utcnow() + timedelta(seconds=additional_seconds)
+        self.expires_at = datetime.now(timezone.utc) + timedelta(seconds=additional_seconds)
         await self.update_activity(db)
     
     async def end_session(
@@ -193,12 +193,12 @@ class UserSession(BaseModel):
     ) -> None:
         """End the session."""
         self.is_active = False
-        self.ended_at = datetime.utcnow()
+        self.ended_at = datetime.now(timezone.utc)
         
         # Store end reason in session data
         session_data = self.session_data or {}
         session_data['end_reason'] = reason
-        session_data['ended_at'] = datetime.utcnow().isoformat()
+        session_data['ended_at'] = datetime.now(timezone.utc).isoformat()
         self.session_data = session_data
         
         await self.save(db)
@@ -220,7 +220,7 @@ class UserSession(BaseModel):
         
         session_data = self.session_data or {}
         session_data['suspicious_reason'] = reason
-        session_data['marked_suspicious_at'] = datetime.utcnow().isoformat()
+        session_data['marked_suspicious_at'] = datetime.now(timezone.utc).isoformat()
         self.session_data = session_data
         
         await self.save(db)
@@ -251,7 +251,7 @@ class UserSession(BaseModel):
     
     def is_expired(self) -> bool:
         """Check if session is expired."""
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
     
     def is_valid(self) -> bool:
         """Check if session is valid (active and not expired)."""
@@ -297,7 +297,7 @@ class SessionManager:
         }
         
         # Cache for session lifetime
-        ttl = int((session.expires_at - datetime.utcnow()).total_seconds())
+        ttl = int((session.expires_at - datetime.now(timezone.utc)).total_seconds())
         if ttl > 0:
             await self.redis.setex(
                 session_key, 

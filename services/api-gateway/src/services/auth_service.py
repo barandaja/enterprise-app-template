@@ -85,7 +85,7 @@ class AuthenticationService:
         """Fetch JWT configuration from auth service."""
         try:
             # Try to get JWT public key from auth service
-            config_url = f"{settings.auth_service_url}/auth/config/jwt"
+            config_url = f"{settings.auth_service_url}/api/v1/auth/config/jwt"
             response = await self.http_client.get(config_url)
             
             if response.status_code == 200:
@@ -200,7 +200,7 @@ class AuthenticationService:
         """Validate token with remote auth service."""
         try:
             # Call auth service validation endpoint
-            validation_url = f"{settings.auth_service_url}/auth/validate"
+            validation_url = f"{settings.auth_service_url}/api/v1/auth/validate"
             response = await self.http_client.post(
                 validation_url,
                 json={"token": token},

@@ -24,17 +24,23 @@ class RedisManager:
     async def initialize(self):
         """Initialize Redis connection pool."""
         try:
-            # Parse Redis URL
+            # Parse Redis URL - configured to prevent recursion issues
             redis_kwargs = {
                 "max_connections": settings.REDIS_POOL_SIZE,
                 "retry_on_timeout": True,
                 "retry_on_error": [ConnectionError, TimeoutError],
                 "socket_keepalive": True,
                 "socket_keepalive_options": {},
-                "health_check_interval": 30,
+                # Disable health check during connection to prevent recursion
+                # The health check will trigger PING which causes reconnection loop
+                "health_check_interval": 0,  # Disable automatic health checks
+                # Disable client info to prevent CLIENT SETINFO commands during connect
+                "client_name": None,  # Don't set client name to avoid CLIENT SETINFO
             }
             
-            if settings.REDIS_PASSWORD:
+            # Only add password if not already in URL (to avoid conflicts)
+            # Check if URL already contains authentication (format: redis://:password@host or redis://user:password@host)
+            if settings.REDIS_PASSWORD and "@" not in settings.REDIS_URL:
                 redis_kwargs["password"] = settings.REDIS_PASSWORD
             
             # Only add SSL parameters if SSL is enabled and we have a secure URL
@@ -51,9 +57,17 @@ class RedisManager:
             # Create Redis client
             self._client = redis.Redis(connection_pool=self._pool)
             
-            # Test connection
-            await self._client.ping()
-            logger.info("Redis connection initialized successfully")
+            # Test connection with timeout to prevent hanging
+            try:
+                # Simple connection test without triggering health checks
+                await asyncio.wait_for(self._client.ping(), timeout=5.0)
+                logger.info("Redis connection initialized and tested successfully")
+            except asyncio.TimeoutError:
+                logger.error("Redis connection test timed out")
+                raise ConnectionError("Redis connection test timed out")
+            except Exception as e:
+                logger.error("Redis connection test failed", error=str(e))
+                raise
             
         except Exception as e:
             logger.error("Failed to initialize Redis connection", error=str(e))
@@ -77,8 +91,17 @@ class RedisManager:
     async def health_check(self) -> bool:
         """Check Redis connection health."""
         try:
-            await self._client.ping()
-            return True
+            if not self._client:
+                logger.warning("Redis health check skipped - client not initialized")
+                return False
+            
+            # Use a simple ping with explicit timeout to avoid recursion
+            pong = await self._client.ping()
+            if pong:
+                return True
+            else:
+                logger.warning("Redis ping returned False")
+                return False
         except Exception as e:
             logger.error("Redis health check failed", error=str(e))
             return False

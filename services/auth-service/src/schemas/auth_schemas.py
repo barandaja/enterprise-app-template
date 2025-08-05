@@ -1,10 +1,13 @@
 """
 Authentication-related Pydantic schemas for request/response validation.
 """
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, validator
 from ..core.config import settings
+
+if TYPE_CHECKING:
+    from .user_schemas import UserResponse
 
 
 class LoginRequest(BaseModel):
@@ -272,41 +275,97 @@ class EmailVerificationResponse(BaseModel):
         }
 
 
-# User response schema (referenced in LoginResponse)
-class UserResponse(BaseModel):
-    """User response schema for API responses."""
+class RegistrationRequest(BaseModel):
+    """User registration request schema."""
     
-    id: int = Field(..., description="User ID")
-    email: str = Field(..., description="User's email address")
-    first_name: Optional[str] = Field(None, description="User's first name")
-    last_name: Optional[str] = Field(None, description="User's last name")
-    is_active: bool = Field(..., description="Whether user is active")
-    is_verified: bool = Field(..., description="Whether user's email is verified")
-    is_superuser: bool = Field(..., description="Whether user is a superuser")
-    roles: List[str] = Field([], description="User's roles")
-    permissions: List[str] = Field([], description="User's permissions")
-    last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
-    created_at: datetime = Field(..., description="Account creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
+    email: EmailStr = Field(..., description="User's email address")
+    password: str = Field(
+        ..., 
+        min_length=settings.PASSWORD_MIN_LENGTH,
+        description="User's password"
+    )
+    confirm_password: str = Field(..., description="Password confirmation")
+    first_name: str = Field(..., min_length=1, max_length=100, description="User's first name")
+    last_name: str = Field(..., min_length=1, max_length=100, description="User's last name")
+    accept_terms: bool = Field(..., description="User accepts terms and conditions")
+    accept_privacy: bool = Field(..., description="User accepts privacy policy")
+    marketing_consent: bool = Field(False, description="User consents to marketing communications")
+    
+    @validator('confirm_password')
+    def passwords_match(cls, v, values):
+        if 'password' in values and v != values['password']:
+            raise ValueError('Passwords do not match')
+        return v
+    
+    @validator('password')
+    def validate_password_strength(cls, v):
+        from ..core.security import SecurityService
+        is_valid, errors = SecurityService.validate_password_strength(v)
+        if not is_valid:
+            raise ValueError(f"Password validation failed: {', '.join(errors)}")
+        return v
+    
+    @validator('accept_terms')
+    def terms_must_be_accepted(cls, v):
+        if not v:
+            raise ValueError('Terms and conditions must be accepted')
+        return v
+    
+    @validator('accept_privacy')
+    def privacy_must_be_accepted(cls, v):
+        if not v:
+            raise ValueError('Privacy policy must be accepted')
+        return v
     
     class Config:
-        from_attributes = True
         schema_extra = {
             "example": {
-                "id": 1,
-                "email": "user@example.com",
-                "first_name": "John",
+                "email": "newuser@example.com",
+                "password": "SecurePassword123!",
+                "confirm_password": "SecurePassword123!",
+                "first_name": "Jane",
                 "last_name": "Doe",
-                "is_active": True,
-                "is_verified": True,
-                "is_superuser": False,
-                "roles": ["user"],
-                "permissions": ["users:read"],
-                "last_login_at": "2023-01-01T12:00:00Z",
-                "created_at": "2023-01-01T00:00:00Z",
-                "updated_at": "2023-01-01T12:00:00Z"
+                "accept_terms": True,
+                "accept_privacy": True,
+                "marketing_consent": False
             }
         }
+
+
+class RegistrationResponse(BaseModel):
+    """User registration response schema."""
+    
+    message: str = Field(..., description="Registration status message")
+    user_id: int = Field(..., description="Created user ID")
+    email: str = Field(..., description="User's email address")
+    verification_sent: bool = Field(..., description="Whether verification email was sent")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "message": "Registration successful. Please check your email for verification.",
+                "user_id": 123,
+                "email": "newuser@example.com",
+                "verification_sent": True
+            }
+        }
+
+
+class CSRFTokenResponse(BaseModel):
+    """CSRF token response schema."""
+    
+    csrf_token: str = Field(..., description="CSRF token for form submissions")
+    expires_at: datetime = Field(..., description="Token expiration timestamp")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "csrf_token": "csrf_token_abc123def456",
+                "expires_at": "2023-01-01T13:00:00Z"
+            }
+        }
+
+
 
 
 class SessionInfo(BaseModel):
@@ -366,6 +425,44 @@ class SessionListResponse(BaseModel):
         }
 
 
+class TokenValidationRequest(BaseModel):
+    """Token validation request schema."""
+    
+    token: str = Field(..., description="JWT token to validate")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+            }
+        }
+
+
+class TokenValidationResponse(BaseModel):
+    """Token validation response schema."""
+    
+    user_id: str = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    roles: List[str] = Field(..., description="User roles")
+    permissions: List[str] = Field(..., description="User permissions")
+    is_active: bool = Field(..., description="Whether user is active")
+    is_verified: bool = Field(..., description="Whether user email is verified")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "user_id": "123",
+                "email": "user@example.com",
+                "roles": ["user"],
+                "permissions": ["read:profile", "write:profile"],
+                "is_active": True,
+                "is_verified": True,
+                "metadata": {}
+            }
+        }
+
+
 class ErrorResponse(BaseModel):
     """Error response schema."""
     
@@ -384,4 +481,11 @@ class ErrorResponse(BaseModel):
 
 
 # Update forward references
-LoginResponse.model_rebuild()
+def _rebuild_models():
+    """Rebuild models with forward references after all imports."""
+    from .user_schemas import UserResponse
+    globals()['UserResponse'] = UserResponse
+    LoginResponse.model_rebuild()
+
+# Call rebuild function
+_rebuild_models()

@@ -3,7 +3,7 @@ Session management service with Redis backing and comprehensive security feature
 Implements session lifecycle management, validation, and cleanup.
 """
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 import structlog
@@ -241,33 +241,52 @@ class SessionService:
             # Get session by refresh token
             session = await UserSession.get_by_refresh_token_id(db, refresh_token_id)
             if not session or not session.is_valid():
+                logger.info("Invalid or expired refresh token", refresh_token_id=refresh_token_id)
                 return None
+            
+            logger.info("Found valid session for refresh", session_id=session.session_id, user_id=session.user_id)
             
             # Rotate tokens for security
             old_refresh_token_id = session.refresh_token_id
+            logger.info("Rotating session tokens", session_id=session.session_id)
             new_refresh_token_id = await session.rotate_tokens(db)
             
             # Extend session if needed
-            if session.expires_at - datetime.utcnow() < timedelta(hours=1):
+            if session.expires_at - datetime.now(timezone.utc) < timedelta(hours=1):
+                logger.info("Extending session expiration", session_id=session.session_id)
                 await session.extend_session(db)
             
-            # Update cache
+            # Update cache - do this before audit logging to avoid cache inconsistency
+            logger.info("Updating session cache", session_id=session.session_id)
             await self.session_manager.cache_session(session)
             
-            # Log token refresh
-            await self.audit_logger.log_auth_event(
-                db=db,
-                event_type=AuditEventType.LOGIN_SUCCESS,
-                user_id=session.user_id,
-                session_id=session.session_id,
-                ip_address=ip_address,
-                success=True,
-                description="Session refreshed via refresh token",
-                event_data={
-                    "old_refresh_token_id": old_refresh_token_id,
-                    "new_refresh_token_id": new_refresh_token_id
-                }
-            )
+            # Log token refresh - this is where the error likely occurs
+            logger.info("Creating audit log for session refresh", session_id=session.session_id)
+            try:
+                await self.audit_logger.log_auth_event(
+                    db=db,
+                    event_type=AuditEventType.LOGIN_SUCCESS,
+                    user_id=session.user_id,
+                    session_id=session.session_id,
+                    ip_address=ip_address,
+                    success=True,
+                    description="Session refreshed via refresh token",
+                    event_data={
+                        "old_refresh_token_id": old_refresh_token_id,
+                        "new_refresh_token_id": new_refresh_token_id
+                    }
+                )
+                logger.info("Audit log created successfully for session refresh")
+            except Exception as audit_error:
+                logger.error(
+                    "Audit logging failed during session refresh",
+                    session_id=session.session_id,
+                    user_id=session.user_id,
+                    audit_error=str(audit_error),
+                    audit_error_type=type(audit_error).__name__
+                )
+                # Re-raise the audit error to surface the real issue
+                raise audit_error
             
             logger.info(
                 "Session refreshed successfully",
@@ -278,8 +297,16 @@ class SessionService:
             return session
         
         except Exception as e:
-            logger.error("Session refresh failed", refresh_token_id=refresh_token_id, error=str(e))
-            return None
+            logger.error(
+                "Session refresh failed", 
+                refresh_token_id=refresh_token_id, 
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            # Import traceback for full error details
+            import traceback
+            logger.error("Session refresh full traceback", traceback=traceback.format_exc())
+            raise  # Re-raise the error instead of returning None
     
     async def end_session(
         self,

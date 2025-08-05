@@ -222,12 +222,14 @@ def upgrade() -> None:
             INSERT INTO "user" (
                 email, first_name, last_name, hashed_password, 
                 is_active, is_verified, is_superuser,
+                failed_login_attempts,
                 data_processing_consent, marketing_consent,
                 email_verified_at, password_changed_at,
                 created_at, updated_at, is_deleted
             ) VALUES (
                 :email, :first_name, :last_name, :hashed_password,
                 :is_active, :is_verified, :is_superuser,
+                :failed_login_attempts,
                 :data_processing_consent, :marketing_consent,
                 :email_verified_at, :password_changed_at,
                 :created_at, :updated_at, :is_deleted
@@ -240,6 +242,7 @@ def upgrade() -> None:
             'is_active': True,
             'is_verified': True,
             'is_superuser': True,
+            'failed_login_attempts': 0,
             'data_processing_consent': True,
             'marketing_consent': False,
             'email_verified_at': datetime.utcnow(),

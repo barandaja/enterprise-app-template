@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.pool import QueuePool
 import structlog
 from .config import settings
+from ..models.base import Base
 
 logger = structlog.get_logger()
 
@@ -35,7 +36,7 @@ AsyncSessionLocal = async_sessionmaker(
     engine, 
     class_=AsyncSession, 
     expire_on_commit=False,
-    autoflush=False
+    autoflush=True
 )
 
 
@@ -50,7 +51,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.commit()
         except Exception as e:
             await session.rollback()
-            logger.error("Database session error", error=str(e))
+            logger.error(
+                "Database session error", 
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            # Import traceback for full error details
+            import traceback
+            logger.error("Database session full traceback", traceback=traceback.format_exc())
             raise
         finally:
             await session.close()

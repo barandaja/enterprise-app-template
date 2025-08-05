@@ -81,7 +81,8 @@ class TokenService:
     async def create_refresh_token(
         self,
         user_id: int,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        jti: Optional[str] = None
     ) -> str:
         """
         Create JWT refresh token.
@@ -89,6 +90,7 @@ class TokenService:
         Args:
             user_id: User ID
             session_id: Session ID (optional)
+            jti: JWT ID to use for token (optional, will generate if not provided)
         
         Returns:
             JWT refresh token
@@ -98,7 +100,7 @@ class TokenService:
             if session_id:
                 data["session_id"] = session_id
             
-            token = SecurityService.create_refresh_token(data=data)
+            token = SecurityService.create_refresh_token(data=data, jti=jti)
             
             # Publish token created event
             from ...events.auth_events import TokenCreatedEvent
@@ -238,7 +240,8 @@ class TokenService:
             
             new_refresh_token = await self.create_refresh_token(
                 user_id=int(user_id),
-                session_id=session_id
+                session_id=session_id,
+                jti=session.refresh_token_id if session else None
             )
             
             # Publish token refreshed event

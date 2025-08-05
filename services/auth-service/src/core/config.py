@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     
     # Global rate limits (per IP)
     RATE_LIMIT_GLOBAL_PER_MINUTE: int = Field(default=300, ge=100, le=1000)
+    
+    # Session validation settings
+    ENFORCE_IP_VALIDATION: bool = Field(default=False, env="ENFORCE_IP_VALIDATION")
     RATE_LIMIT_GLOBAL_PER_HOUR: int = Field(default=10000, ge=5000, le=50000)
     
     # Session settings

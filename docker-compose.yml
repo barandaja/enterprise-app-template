@@ -46,22 +46,30 @@ services:
       dockerfile: Dockerfile
       target: development
     container_name: enterprise_auth_service
-    env_file:
-      - .env
     environment:
       # Override specific values for containerized environment
       - DATABASE_URL=postgresql+asyncpg://enterprise_user:iou5ko4lJVFY9BV0hDJfotLSj@postgres:5432/auth_db
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:Vzje9bdeyRdUBgDbXZlNHtInm@redis:6379/0
       - REDIS_SSL=false
-      - JWT_SECRET_KEY=dev_jwt_secret_key_change_in_production
+      - SECRET_KEY=bd3faf70ffee270dc9b6b0ab1892929f82b0aa66b926c687ecbf650afd6fdfd0
+      - JWT_SECRET_KEY=7e119a5beec74bffab47cd428415c16b3b9d84002a67243be4f9a37d3fb6dd8e
+      - ENCRYPTION_KEY=bd3faf70ffee270dc9b6b0ab1892929f82b0aa66b926c687ecbf650afd6fdfe1
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
+      # Email configuration (required)
+      - SMTP_HOST=localhost
+      - SMTP_PORT=587
+      - SMTP_USER=test@localhost
+      - SMTP_PASSWORD=testpass
+      - SMTP_TLS=false
+      - EMAILS_FROM_EMAIL=noreply@enterprise.local
+      - EMAILS_FROM_NAME=Enterprise Auth Service
     ports:
       - "8001:8000"
     volumes:
-      - ./services/auth-service/src:/app/src:ro
-      - ./services/auth-service/alembic:/app/alembic:ro
-      - ./services/auth-service/alembic.ini:/app/alembic.ini:ro
+      - ./services/auth-service/src:/app/src
+      - ./services/auth-service/alembic:/app/alembic
+      - ./services/auth-service/alembic.ini:/app/alembic.ini
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,9 +138,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./services/api-gateway/src:/app/src:ro
-      - ./services/api-gateway/alembic:/app/alembic:ro
-      - ./services/api-gateway/alembic.ini:/app/alembic.ini:ro
+      - ./services/api-gateway/src:/app/src
+      - ./services/api-gateway/alembic:/app/alembic
+      - ./services/api-gateway/alembic.ini:/app/alembic.ini
     depends_on:
       postgres:
         condition: service_healthy
@@ -176,8 +184,8 @@ services:
       - ./frontend/tsconfig.json:/app/tsconfig.json:ro
       - ./frontend/tsconfig.app.json:/app/tsconfig.app.json:ro
       - ./frontend/tsconfig.node.json:/app/tsconfig.node.json:ro
-      # Exclude node_modules from volume mount for better performance
-      - /app/node_modules
+      # Use named volume for node_modules to persist dependencies
+      - frontend_node_modules:/app/node_modules
     depends_on:
       - api-gateway
     restart: unless-stopped
@@ -239,6 +247,8 @@ volumes:
   redis_data:
     driver: local
   pgadmin_data:
+    driver: local
+  frontend_node_modules:
     driver: local
 
 networks:

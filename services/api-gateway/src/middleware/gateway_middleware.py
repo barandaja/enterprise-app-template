@@ -424,10 +424,19 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Skip authentication for public endpoints
+        # Get dynamic auth paths from settings
+        auth_paths = settings.get_auth_paths()
+        
         public_paths = [
             "/health", "/ready", "/docs", "/redoc", "/openapi.json",
-            "/auth/login", "/auth/register", "/auth/password-reset"
+            "/auth/login", "/auth/register", "/auth/password-reset", "/auth/csrf",
+            "/auth/refresh", "/api/v1/auth/refresh",  # Add refresh to public paths
+            "/security/events", "/api/security/events", 
+            settings.get_api_path("security", "events")
         ]
+        
+        # Add dynamic auth paths
+        public_paths.extend(auth_paths)
         
         if any(request.url.path.startswith(path) for path in public_paths):
             return await call_next(request)

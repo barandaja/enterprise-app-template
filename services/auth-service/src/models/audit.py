@@ -65,11 +65,42 @@ class AuditEventType(str, Enum):
     RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
     UNAUTHORIZED_ACCESS = "unauthorized_access"
     
+    # Token events
+    TOKEN_CREATED = "token_created"
+    TOKEN_REFRESHED = "token_refreshed"
+    
+    # Session events
+    SESSION_CREATED = "session_created"
+    SESSION_ENDED = "session_ended"
+    
     # Compliance events
     GDPR_DATA_REQUEST = "gdpr_data_request"
     GDPR_DATA_DELETE = "gdpr_data_delete"
+    GDPR_DATA_ACCESS = "gdpr_data_access"
+    GDPR_CONSENT_UPDATE = "gdpr_consent_update"
     HIPAA_ACCESS = "hipaa_access"
     SOC2_CONTROL_CHECK = "soc2_control_check"
+    
+    # System events (additional)
+    SYSTEM_ERROR = "system_error"
+    
+    # Permission events (additional)
+    PERMISSION_REVOKED = "permission_revoked"
+    
+    @classmethod
+    def _missing_(cls, value):
+        """Handle missing enum values for backward compatibility."""
+        if isinstance(value, str):
+            # Convert uppercase to lowercase for backward compatibility
+            value_lower = value.lower()
+            for member in cls:
+                if member.value == value_lower:
+                    return member
+            # If no match found, try to find by name (case-insensitive)
+            for member in cls:
+                if member.name.lower() == value_lower:
+                    return member
+        return None
 
 
 class AuditSeverity(str, Enum):
@@ -79,6 +110,21 @@ class AuditSeverity(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+    
+    @classmethod
+    def _missing_(cls, value):
+        """Handle missing enum values for backward compatibility."""
+        if isinstance(value, str):
+            # Convert uppercase to lowercase for backward compatibility
+            value_lower = value.lower()
+            for member in cls:
+                if member.value == value_lower:
+                    return member
+            # If no match found, try to find by name (case-insensitive)
+            for member in cls:
+                if member.name.lower() == value_lower:
+                    return member
+        return None
 
 
 class AuditLog(BaseModel):
@@ -87,13 +133,13 @@ class AuditLog(BaseModel):
     __tablename__ = 'audit_log'
     
     # Event identification
-    event_type = Column(SQLEnum(AuditEventType), nullable=False, index=True)
+    event_type = Column(SQLEnum(AuditEventType, values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
     event_id = Column(String(128), unique=True, nullable=False, index=True)  # UUID for tracing
     correlation_id = Column(String(128), nullable=True, index=True)  # For tracing related events
     
     # Event metadata
     timestamp = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
-    severity = Column(SQLEnum(AuditSeverity), default=AuditSeverity.LOW, nullable=False)
+    severity = Column(SQLEnum(AuditSeverity, values_callable=lambda x: [e.value for e in x]), default=AuditSeverity.LOW, nullable=False)
     
     # User and session context
     user_id = Column(Integer, ForeignKey('user.id'), nullable=True, index=True)
@@ -166,55 +212,72 @@ class AuditLog(BaseModel):
         pii_accessed: bool = False,
         execution_time_ms: Optional[int] = None,
         **kwargs
-    ) -> 'AuditLog':
-        """Create a new audit log entry."""
+    ) -> Optional['AuditLog']:
+        """Create a new audit log entry with error handling bypass."""
         import uuid
         
-        # Determine compliance relevance
-        gdpr_relevant = pii_accessed or event_type in [
-            AuditEventType.GDPR_DATA_REQUEST,
-            AuditEventType.GDPR_DATA_DELETE,
-            AuditEventType.DATA_EXPORT
-        ]
-        
-        hipaa_relevant = (
-            pii_accessed or 
-            settings.HIPAA_COMPLIANT_MODE and 
-            event_type in [
-                AuditEventType.DATA_READ,
-                AuditEventType.DATA_CREATE,
-                AuditEventType.DATA_UPDATE,
-                AuditEventType.DATA_DELETE,
-                AuditEventType.HIPAA_ACCESS
+        try:
+            # Determine compliance relevance
+            gdpr_relevant = pii_accessed or event_type in [
+                AuditEventType.GDPR_DATA_REQUEST,
+                AuditEventType.GDPR_DATA_DELETE,
+                AuditEventType.DATA_EXPORT
             ]
-        )
-        
-        audit_log = cls(
-            event_type=event_type,
-            event_id=str(uuid.uuid4()),
-            correlation_id=correlation_id,
-            user_id=user_id,
-            session_id=session_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            resource_name=resource_name,
-            action=action,
-            description=description,
-            event_data=event_data or {},
-            success=success,
-            severity=severity,
-            error_code=error_code,
-            error_message=error_message,
-            pii_accessed=pii_accessed,
-            gdpr_relevant=gdpr_relevant,
-            hipaa_relevant=hipaa_relevant,
-            execution_time_ms=execution_time_ms,
-            **kwargs
-        )
-        
-        return await audit_log.save(db)
+            
+            hipaa_relevant = (
+                pii_accessed or 
+                settings.HIPAA_COMPLIANT_MODE and 
+                event_type in [
+                    AuditEventType.DATA_READ,
+                    AuditEventType.DATA_CREATE,
+                    AuditEventType.DATA_UPDATE,
+                    AuditEventType.DATA_DELETE,
+                    AuditEventType.HIPAA_ACCESS
+                ]
+            )
+            
+            audit_log = cls(
+                event_type=event_type,
+                event_id=str(uuid.uuid4()),
+                correlation_id=correlation_id,
+                user_id=user_id,
+                session_id=session_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                resource_name=resource_name,
+                action=action,
+                description=description,
+                event_data=event_data or {},
+                success=success,
+                severity=severity,
+                error_code=error_code,
+                error_message=error_message,
+                pii_accessed=pii_accessed,
+                gdpr_relevant=gdpr_relevant,
+                hipaa_relevant=hipaa_relevant,
+                execution_time_ms=execution_time_ms,
+                **kwargs
+            )
+            
+            return await audit_log.save(db)
+            
+        except Exception as e:
+            # Log the actual error details for debugging
+            logger.error(
+                "Audit logging failed - this indicates a database or schema issue",
+                event_type=event_type.value if hasattr(event_type, 'value') else str(event_type),
+                action=action,
+                description=description,
+                user_id=user_id,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            
+            # Re-raise the original exception instead of masking it
+            # This will help identify the real underlying issue
+            raise
     
     @classmethod
     async def get_user_audit_trail(
@@ -364,7 +427,7 @@ class AuditLogger:
         success: bool = True,
         description: str = "",
         **kwargs
-    ) -> AuditLog:
+    ) -> Optional[AuditLog]:
         """Log authentication-related events."""
         severity = AuditSeverity.MEDIUM if not success else AuditSeverity.LOW
         
@@ -393,7 +456,7 @@ class AuditLogger:
         success: bool = True,
         description: str = "",
         **kwargs
-    ) -> AuditLog:
+    ) -> Optional[AuditLog]:
         """Log data access events."""
         event_type = getattr(AuditEventType, f"DATA_{action.upper()}", AuditEventType.DATA_READ)
         severity = AuditSeverity.MEDIUM if pii_accessed else AuditSeverity.LOW
@@ -423,7 +486,7 @@ class AuditLogger:
         ip_address: Optional[str] = None,
         severity: AuditSeverity = AuditSeverity.HIGH,
         **kwargs
-    ) -> AuditLog:
+    ) -> Optional[AuditLog]:
         """Log security-related events."""
         return await AuditLog.create_audit_log(
             db=db,

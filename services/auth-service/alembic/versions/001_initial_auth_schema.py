@@ -49,25 +49,9 @@ def upgrade() -> None:
     - Appropriate indexes for performance
     """
     
-    # Create enum types for PostgreSQL
-    auditeventtype_enum = sa.Enum(
-        'LOGIN_SUCCESS', 'LOGIN_FAILURE', 'LOGOUT', 'PASSWORD_CHANGE', 'PASSWORD_RESET',
-        'ACCOUNT_LOCKED', 'ACCOUNT_UNLOCKED', 'PERMISSION_GRANTED', 'PERMISSION_DENIED',
-        'ROLE_ASSIGNED', 'ROLE_REMOVED', 'DATA_READ', 'DATA_CREATE', 'DATA_UPDATE',
-        'DATA_DELETE', 'DATA_EXPORT', 'USER_CREATED', 'USER_UPDATED', 'USER_DELETED',
-        'USER_ACTIVATED', 'USER_DEACTIVATED', 'SYSTEM_START', 'SYSTEM_STOP',
-        'CONFIG_CHANGE', 'BACKUP_CREATED', 'SECURITY_ALERT', 'SUSPICIOUS_ACTIVITY',
-        'RATE_LIMIT_EXCEEDED', 'UNAUTHORIZED_ACCESS', 'GDPR_DATA_REQUEST',
-        'GDPR_DATA_DELETE', 'HIPAA_ACCESS', 'SOC2_CONTROL_CHECK',
-        name='auditeventtype'
-    )
-    auditeventtype_enum.create(op.get_bind(), checkfirst=True)
+    # Note: Using CHECK constraints instead of ENUM types to avoid SQLAlchemy conflicts
+    # The constraints are added after table creation to ensure proper validation
     
-    auditseverity_enum = sa.Enum(
-        'LOW', 'MEDIUM', 'HIGH', 'CRITICAL',
-        name='auditseverity'
-    )
-    auditseverity_enum.create(op.get_bind(), checkfirst=True)
     
     # Create permission table
     op.create_table(
@@ -242,12 +226,12 @@ def upgrade() -> None:
         'audit_log',
         sa.Column('id', sa.Integer(), nullable=False),
         # Event identification
-        sa.Column('event_type', auditeventtype_enum, nullable=False),
+        sa.Column('event_type', sa.Text(), nullable=False),
         sa.Column('event_id', sa.String(length=128), nullable=False),
         sa.Column('correlation_id', sa.String(length=128), nullable=True),
         # Event metadata
         sa.Column('timestamp', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('severity', auditseverity_enum, nullable=False, default='LOW'),
+        sa.Column('severity', sa.Text(), nullable=False, default='LOW'),
         # User and session context
         sa.Column('user_id', sa.Integer(), nullable=True),
         sa.Column('session_id', sa.String(length=128), nullable=True),
@@ -320,6 +304,28 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id')
     )
     
+    # Add constraints to enforce enum values
+    op.execute("""
+        ALTER TABLE audit_log 
+        ADD CONSTRAINT audit_log_event_type_check 
+        CHECK (event_type IN (
+            'LOGIN_SUCCESS', 'LOGIN_FAILURE', 'LOGOUT', 'PASSWORD_CHANGE', 'PASSWORD_RESET',
+            'ACCOUNT_LOCKED', 'ACCOUNT_UNLOCKED', 'PERMISSION_GRANTED', 'PERMISSION_DENIED',
+            'ROLE_ASSIGNED', 'ROLE_REMOVED', 'DATA_READ', 'DATA_CREATE', 'DATA_UPDATE',
+            'DATA_DELETE', 'DATA_EXPORT', 'USER_CREATED', 'USER_UPDATED', 'USER_DELETED',
+            'USER_ACTIVATED', 'USER_DEACTIVATED', 'SYSTEM_START', 'SYSTEM_STOP',
+            'CONFIG_CHANGE', 'BACKUP_CREATED', 'SECURITY_ALERT', 'SUSPICIOUS_ACTIVITY',
+            'RATE_LIMIT_EXCEEDED', 'UNAUTHORIZED_ACCESS', 'GDPR_DATA_REQUEST',
+            'GDPR_DATA_DELETE', 'HIPAA_ACCESS', 'SOC2_CONTROL_CHECK'
+        ))
+    """)
+    
+    op.execute("""
+        ALTER TABLE audit_log 
+        ADD CONSTRAINT audit_log_severity_check 
+        CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'))
+    """)
+
     op.create_table(
         'role_permission',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -361,6 +367,4 @@ def downgrade() -> None:
     op.drop_table('role')
     op.drop_table('permission')
     
-    # Drop enum types
-    sa.Enum(name='auditseverity').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='auditeventtype').drop(op.get_bind(), checkfirst=True)
+    # Note: Check constraints are automatically dropped with the tables

@@ -19,39 +19,46 @@ depends_on = None
 def upgrade() -> None:
     """Add HIPAA and SOC2 compliance tables."""
     
-    # Create enum types for PostgreSQL (with checkfirst=True for idempotency)
+    # Note: Using CHECK constraints instead of ENUM types to avoid SQLAlchemy conflicts
+    # The constraints are added after table creation to ensure proper validation
+    
+    # Create all required ENUM types
+    trustservicecriteria_enum = sa.Enum(
+        'security', 'availability', 'processing_integrity', 'confidentiality', 'privacy',
+        name='trustservicecriteria'
+    )
+    trustservicecriteria_enum.create(op.get_bind(), checkfirst=True)
+    
     phicategory_enum = sa.Enum(
-        'demographic', 'financial', 'medical_record_number', 'health_plan_number',
-        'biometric', 'photo', 'contact', 'device_identifier', 'web_url',
-        'ip_address', 'medical_data', 'insurance', 'other',
+        'demographics', 'medical_history', 'diagnosis', 'treatment', 'medication',
+        'lab_results', 'radiology', 'billing', 'insurance', 'contact_info',
         name='phicategory'
     )
     phicategory_enum.create(op.get_bind(), checkfirst=True)
     
     accesspurpose_enum = sa.Enum(
-        'treatment', 'payment', 'operations', 'research', 'public_health',
-        'emergency', 'legal', 'audit', 'administrative', 'minimum_necessary',
+        'treatment', 'payment', 'healthcare_operations', 'research', 'quality_assurance',
+        'audit', 'emergency', 'administrative', 'legal', 'other',
         name='accesspurpose'
     )
     accesspurpose_enum.create(op.get_bind(), checkfirst=True)
     
     baaagreementstatus_enum = sa.Enum(
-        'active', 'pending', 'expired', 'terminated', 'suspended', 'under_review',
+        'draft', 'active', 'expired', 'terminated', 'suspended',
         name='baaagreementstatus'
     )
     baaagreementstatus_enum.create(op.get_bind(), checkfirst=True)
     
     emergencyaccesstype_enum = sa.Enum(
-        'break_glass', 'life_threatening', 'clinical_emergency', 'system_outage',
-        'disaster_recovery', 'security_incident',
+        'medical_emergency', 'system_failure', 'security_incident', 'data_recovery',
+        'break_glass', 'administrative_override',
         name='emergencyaccesstype'
     )
     emergencyaccesstype_enum.create(op.get_bind(), checkfirst=True)
     
     incidentcategory_enum = sa.Enum(
-        'security_breach', 'unauthorized_access', 'system_outage', 'data_loss',
-        'malware', 'phishing', 'policy_violation', 'vulnerability',
-        'performance', 'compliance', 'other',
+        'security_breach', 'data_loss', 'system_outage', 'unauthorized_access',
+        'malware', 'phishing', 'insider_threat', 'vulnerability', 'compliance_violation',
         name='incidentcategory'
     )
     incidentcategory_enum.create(op.get_bind(), checkfirst=True)
@@ -63,45 +70,36 @@ def upgrade() -> None:
     incidentseverity_enum.create(op.get_bind(), checkfirst=True)
     
     incidentstatus_enum = sa.Enum(
-        'open', 'in_progress', 'escalated', 'resolved', 'closed', 'reopened',
+        'open', 'assigned', 'in_progress', 'resolved', 'closed', 'cancelled',
         name='incidentstatus'
     )
     incidentstatus_enum.create(op.get_bind(), checkfirst=True)
     
     anomalytype_enum = sa.Enum(
-        'login_anomaly', 'access_pattern', 'data_volume', 'time_pattern',
-        'location_anomaly', 'permission_escalation', 'failed_attempts',
-        'resource_usage', 'network_traffic', 'system_behavior',
+        'authentication_anomaly', 'access_pattern_anomaly', 'data_volume_anomaly',
+        'time_based_anomaly', 'location_anomaly', 'behavior_anomaly',
         name='anomalytype'
     )
     anomalytype_enum.create(op.get_bind(), checkfirst=True)
     
     vendoraccesslevel_enum = sa.Enum(
-        'no_access', 'limited', 'standard', 'elevated', 'full_admin',
+        'read_only', 'limited_write', 'full_access', 'administrative', 'emergency',
         name='vendoraccesslevel'
     )
     vendoraccesslevel_enum.create(op.get_bind(), checkfirst=True)
     
     changetype_enum = sa.Enum(
-        'standard', 'normal', 'emergency', 'configuration', 'access_control',
-        'security_policy', 'system_update', 'user_management', 'role_permission',
-        'data_schema',
+        'configuration', 'security_policy', 'system_update', 'access_control',
+        'data_structure', 'integration', 'emergency',
         name='changetype'
     )
     changetype_enum.create(op.get_bind(), checkfirst=True)
     
     changestatus_enum = sa.Enum(
-        'requested', 'approved', 'rejected', 'in_progress', 'completed',
-        'failed', 'rolled_back', 'under_review',
+        'requested', 'approved', 'in_progress', 'completed', 'failed', 'rolled_back', 'cancelled',
         name='changestatus'
     )
     changestatus_enum.create(op.get_bind(), checkfirst=True)
-    
-    trustservicecriteria_enum = sa.Enum(
-        'security', 'availability', 'processing_integrity', 'confidentiality', 'privacy',
-        name='trustservicecriteria'
-    )
-    trustservicecriteria_enum.create(op.get_bind(), checkfirst=True)
     
     # Create HIPAA compliance tables
     

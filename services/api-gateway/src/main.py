@@ -18,6 +18,7 @@ import structlog
 import uvicorn
 
 from .core.config import get_settings
+import os
 from .core.database import init_db
 from .core.redis import init_redis, get_redis
 from .middleware.gateway_middleware import (
@@ -234,9 +235,15 @@ def create_app() -> FastAPI:
     )
     
     # CORS middleware with explicit domain whitelist
+    # NOTE: Direct environment variable read is used due to Pydantic settings not
+    # properly reading CORS_ORIGINS environment variable. This should be investigated
+    # and fixed in the Settings class configuration.
+    cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",")
+    cors_origins = [origin.strip() for origin in cors_origins]
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,  # Now uses explicit domains from config
+        allow_origins=cors_origins,  # Use direct environment variable read
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],

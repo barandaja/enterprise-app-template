@@ -26,6 +26,7 @@ from .core.middleware import (
     ComplianceMiddleware
 )
 from .api.auth import router as auth_router
+from .container.container import initialize_container, cleanup_container
 
 
 # Configure structured logging
@@ -59,14 +60,18 @@ async def lifespan(app: FastAPI):
         await initialize_redis()
         logger.info("Redis connection initialized")
         
-        # Initialize other services here if needed
-        # await initialize_other_services()
+        # Initialize dependency injection container
+        await initialize_container()
+        logger.info("Dependency injection container initialized")
         
         yield
         
     finally:
         # Shutdown
         logger.info("Shutting down auth service")
+        
+        # Cleanup container
+        await cleanup_container()
         
         # Close connections
         await close_redis()
@@ -91,7 +96,7 @@ app = FastAPI(
 if not settings.DEBUG:
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["localhost", "127.0.0.1"] + settings.BACKEND_CORS_ORIGINS
+        allowed_hosts=["localhost", "127.0.0.1", "auth-service", "auth-service:8000"] + settings.BACKEND_CORS_ORIGINS
     )
 
 # Security headers

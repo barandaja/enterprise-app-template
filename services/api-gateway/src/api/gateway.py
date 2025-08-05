@@ -128,7 +128,7 @@ proxy_handler = RequestProxyHandler()
 
 
 @router.api_route(
-    "/api/v1/auth/{path:path}",
+    f"{settings.api_v1_str}/auth/{{path:path}}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 )
 async def auth_service_proxy(
@@ -140,12 +140,12 @@ async def auth_service_proxy(
     circuit_breaker_manager: CircuitBreakerManager = request.app.state.circuit_breaker_manager
     
     return await proxy_handler.proxy_request(
-        request, "auth", f"auth/{path}", service_registry, circuit_breaker_manager
+        request, "auth", f"{settings.api_v1_str}/auth/{path}", service_registry, circuit_breaker_manager
     )
 
 
 @router.api_route(
-    "/api/v1/users/{path:path}",
+    f"{settings.api_v1_str}/users/{{path:path}}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 )
 async def user_service_proxy(
@@ -162,7 +162,7 @@ async def user_service_proxy(
 
 
 @router.api_route(
-    "/api/v1/{service_name}/{path:path}",
+    f"{settings.api_v1_str}/{{service_name}}/{{path:path}}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 )
 async def dynamic_service_proxy(
@@ -187,7 +187,8 @@ async def dynamic_service_proxy(
     )
 
 
-@router.get("/api/v1/services")
+
+@router.get(f"{settings.api_v1_str}/services")
 async def list_services(request: Request):
     """List all registered services and their status."""
     service_registry: ServiceRegistry = request.app.state.service_registry
@@ -202,7 +203,55 @@ async def list_services(request: Request):
     }
 
 
-@router.get("/api/v1/docs")
+async def _handle_security_events(request: Request):
+    """Common handler for security event logging from frontend."""
+    try:
+        # Parse the request body
+        body = await request.json()
+        events = body.get("events", [])
+        
+        # Log each security event
+        for event in events:
+            logger.info(
+                "Security event logged",
+                event_type=event.get("type"),
+                severity=event.get("severity"), 
+                message=event.get("message"),
+                user_id=event.get("userId"),
+                session_id=event.get("sessionId"),
+                timestamp=event.get("timestamp"),
+                details=event.get("details")
+            )
+        
+        return {"status": "success", "events_logged": len(events)}
+        
+    except Exception as e:
+        logger.error("Failed to process security events", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to process security events"
+        )
+
+
+@router.post("/security/events")
+async def security_events_root(request: Request):
+    """Handle security event logging from frontend (root path)."""
+    return await _handle_security_events(request)
+
+
+@router.post(f"{settings.api_v1_str}/security/events")
+async def security_events_api_v1(request: Request):
+    """Handle security event logging from frontend (API v1 path).""" 
+    return await _handle_security_events(request)
+
+
+@router.post("/api/security/events")
+async def security_events_api(request: Request):
+    """Handle security event logging from frontend (legacy API path).""" 
+    return await _handle_security_events(request)
+
+
+@router.get(f"{settings.api_v1_str}/docs")
 async def aggregated_docs(request: Request):
     """Aggregate OpenAPI documentation from all services."""
     if not settings.docs_aggregation_enabled:
@@ -227,7 +276,7 @@ async def aggregated_docs(request: Request):
             "description": "Aggregated documentation from all microservices"
         },
         "servers": [
-            {"url": "/api/v1", "description": "API Gateway"}
+            {"url": settings.api_v1_str, "description": "API Gateway"}
         ],
         "paths": {},
         "components": {

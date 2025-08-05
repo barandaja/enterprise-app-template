@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     api_version_header: str = "X-API-Version"
     default_api_version: str = "v1"
     supported_api_versions: List[str] = ["v1"]
+    api_v1_str: str = "/api/v1"
     
     # Documentation aggregation
     docs_aggregation_enabled: bool = True
@@ -184,6 +185,29 @@ class Settings(BaseSettings):
             # Standard Kubernetes DNS
             return f"{protocol}://{service_name}.{self.k8s_namespace}.svc.{self.k8s_cluster_domain}:{port}"
     
+    def get_api_path(self, service: str, path: str = "") -> str:
+        """
+        Generate API path for a service endpoint with proper versioning.
+        
+        Args:
+            service: Service name (e.g., 'auth', 'users')
+            path: Additional path segments (optional)
+            
+        Returns:
+            Full API path with version prefix
+        """
+        base_path = f"{self.api_v1_str}/{service}"
+        if path:
+            # Ensure path doesn't start with '/' to avoid double slashes
+            path = path.lstrip('/')
+            return f"{base_path}/{path}"
+        return base_path
+    
+    def get_auth_paths(self) -> List[str]:
+        """Get list of authentication-related paths that should be public."""
+        auth_endpoints = ["login", "register", "password-reset", "csrf"]
+        return [self.get_api_path("auth", endpoint) for endpoint in auth_endpoints]
+    
     def build_service_registry(self) -> Dict[str, str]:
         """Build service registry with Kubernetes DNS names."""
         registry = {}
@@ -216,4 +240,9 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance."""
+    return Settings()
+
+
+def get_fresh_settings() -> Settings:
+    """Get uncached settings instance for debugging."""
     return Settings()

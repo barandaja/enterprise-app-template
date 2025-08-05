@@ -126,7 +126,8 @@ class AuthenticationService:
             
             refresh_token = await self.token_service.create_refresh_token(
                 user_id=user.id,
-                session_id=session.session_id
+                session_id=session.session_id,
+                jti=session.refresh_token_id
             )
             
             # Publish authentication event

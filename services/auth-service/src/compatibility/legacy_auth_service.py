@@ -268,7 +268,8 @@ class LegacyAuthServiceAdapter:
     async def create_refresh_token(
         self,
         user_id: int,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        jti: Optional[str] = None
     ) -> str:
         """
         Create refresh token (new method exposed through legacy interface).
@@ -277,7 +278,8 @@ class LegacyAuthServiceAdapter:
             token_service = self._container.get(TokenService)
             return await token_service.create_refresh_token(
                 user_id=user_id,
-                session_id=session_id
+                session_id=session_id,
+                jti=jti
             )
         except Exception as e:
             logger.error("Legacy create_refresh_token failed", error=str(e))

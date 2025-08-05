@@ -61,12 +61,19 @@ class AuthService:
             HTTPException: If authentication fails
         """
         try:
-            # Get user by email
-            user = await self.user_service.get_user_by_email(db, email)
+            # Get user by email with roles and permissions eagerly loaded
+            logger.info("AuthService.authenticate_user starting", email="***MASKED***")
+            user = await self.user_service.get_user_by_email_with_roles(db, email)
+            logger.info("AuthService user lookup result", 
+                       user_found=user is not None,
+                       user_id=user.id if user else None,
+                       user_active=user.is_active if user else None,
+                       user_verified=user.is_verified if user else None)
             
             # Check if user exists
             if not user:
                 await self._log_failed_login(db, email, "user_not_found", ip_address)
+                logger.warning("Authentication failed: user not found", email="***MASKED***")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid credentials"
@@ -89,9 +96,26 @@ class AuthService:
                 )
             
             # Verify password
-            if not await user.verify_password(password):
-                await user.record_login_attempt(db, success=False, ip_address=ip_address)
-                await self._log_failed_login(db, email, "invalid_password", ip_address, user.id)
+            logger.info("AuthService verifying password", user_id=user.id)
+            try:
+                password_valid = await user.verify_password(password)
+                logger.info("AuthService password verification result", 
+                           user_id=user.id, 
+                           password_valid=password_valid)
+                
+                if not password_valid:
+                    await user.record_login_attempt(db, success=False, ip_address=ip_address)
+                    await self._log_failed_login(db, email, "invalid_password", ip_address, user.id)
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid credentials"
+                    )
+            except Exception as e:
+                logger.error("AuthService password verification failed", 
+                            user_id=user.id, 
+                            error=str(e), 
+                            error_type=type(e).__name__)
+                await self._log_failed_login(db, email, "password_verification_error", ip_address, user.id)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid credentials"
@@ -117,7 +141,8 @@ class AuthService:
             )
             
             refresh_token = SecurityService.create_refresh_token(
-                data={"sub": str(user.id), "session_id": session.session_id}
+                data={"sub": str(user.id), "session_id": session.session_id},
+                jti=session.refresh_token_id
             )
             
             logger.info(
@@ -175,17 +200,35 @@ class AuthService:
                 )
             
             # Refresh session
-            session = await self.session_service.refresh_session(
-                db=db,
-                refresh_token_id=refresh_token_id,
-                ip_address=ip_address
-            )
-            
-            if not session:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid or expired refresh token"
+            logger.info("Attempting to refresh session", refresh_token_id=refresh_token_id[:8] + "...")
+            try:
+                session = await self.session_service.refresh_session(
+                    db=db,
+                    refresh_token_id=refresh_token_id,
+                    ip_address=ip_address
                 )
+                
+                if not session:
+                    logger.warning("Session refresh returned None - invalid or expired token")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired refresh token"
+                    )
+                
+                logger.info("Session refreshed successfully in AuthService", session_id=session.session_id)
+                
+            except HTTPException:
+                # Re-raise HTTP exceptions as-is
+                raise
+            except Exception as session_error:
+                logger.error(
+                    "Session refresh failed in AuthService",
+                    refresh_token_id=refresh_token_id[:8] + "...",
+                    error=str(session_error),
+                    error_type=type(session_error).__name__
+                )
+                # Re-raise to surface the real database error
+                raise
             
             # Generate new tokens
             access_token = SecurityService.create_access_token(
@@ -193,7 +236,8 @@ class AuthService:
             )
             
             new_refresh_token = SecurityService.create_refresh_token(
-                data={"sub": str(user_id), "session_id": session.session_id}
+                data={"sub": str(user_id), "session_id": session.session_id},
+                jti=session.refresh_token_id
             )
             
             logger.info(

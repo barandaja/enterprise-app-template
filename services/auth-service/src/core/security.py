@@ -9,7 +9,6 @@ import re
 import secrets
 import hashlib
 from .config import settings
-from .database import get_db
 import structlog
 
 if TYPE_CHECKING:
@@ -80,7 +79,7 @@ class SecurityService:
         return encoded_jwt
     
     @staticmethod
-    def create_refresh_token(data: dict) -> str:
+    def create_refresh_token(data: dict, jti: Optional[str] = None) -> str:
         """Create JWT refresh token"""
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
@@ -89,7 +88,7 @@ class SecurityService:
             "exp": expire,
             "iat": datetime.utcnow(),
             "type": "refresh",
-            "jti": secrets.token_urlsafe(32)  # JWT ID for revocation
+            "jti": jti or secrets.token_urlsafe(32)  # JWT ID for revocation - use provided jti or generate new one
         })
         
         encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -167,68 +166,7 @@ class SecurityService:
         return hashlib.sha256(api_secret.encode()).hexdigest() == api_secret_hash
 
 
-async def get_current_user(
-    request: Request,
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db)
-) -> "User":
-    """Get current authenticated user from JWT token"""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id: str = payload.get("sub")
-        token_type: str = payload.get("type")
-        
-        if user_id is None or token_type != "access":
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    
-    # Get user from database
-    from ..models.user import User
-    user = await User.get_by_id(db, int(user_id))
-    if user is None:
-        raise credentials_exception
-    
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-    
-    # Extract client IP address from request
-    # Priority: request.state.client_ip (set by middleware) > request.client.host
-    client_ip = getattr(request.state, 'client_ip', None) or (
-        request.client.host if request.client else None
-    )
-    
-    # Log access for audit trail
-    logger.info(
-        "user_authenticated",
-        user_id=user.id,
-        email=user.email,
-        ip_address=client_ip
-    )
-    
-    return user
 
-
-async def get_current_active_superuser(
-    request: Request,
-    current_user: "User" = Depends(get_current_user),
-) -> "User":
-    """Get current active superuser"""
-    if not current_user.is_superuser:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
-        )
-    return current_user
 
 
 class RateLimiter:

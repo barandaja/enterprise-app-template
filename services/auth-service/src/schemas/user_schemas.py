@@ -103,8 +103,18 @@ class UserResponse(BaseModel):
     updated_at: datetime = Field(..., description="Last update timestamp")
     
     @classmethod
-    def from_user_model(cls, user, include_pii: bool = True):
+    async def from_user_model(cls, user, db, include_pii: bool = True):
         """Create UserResponse from User model."""
+        permissions = await user.get_permissions(db)
+        
+        # Get roles safely - after get_permissions, roles should be loaded
+        roles = []
+        try:
+            roles = [role.name for role in user.roles] if hasattr(user, 'roles') and user.roles else []
+        except Exception:
+            # If roles access fails, return empty list
+            roles = []
+        
         return cls(
             id=user.id,
             email=user.email if include_pii else "***MASKED***",
@@ -114,8 +124,8 @@ class UserResponse(BaseModel):
             is_active=user.is_active,
             is_verified=user.is_verified,
             is_superuser=user.is_superuser,
-            roles=[role.name for role in user.roles] if user.roles else [],
-            permissions=user.get_permissions(),
+            roles=roles,
+            permissions=permissions,
             last_login_at=user.last_login_at,
             email_verified_at=user.email_verified_at,
             password_changed_at=user.password_changed_at,
