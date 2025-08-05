@@ -51,9 +51,9 @@ export function MainLayout({
   const getPaddingClasses = () => {
     const paddingClasses = {
       none: '',
-      sm: 'p-4',
-      md: 'p-6',
-      lg: 'p-8'
+      sm: 'p-4 sm:p-6', // Responsive padding
+      md: 'p-4 sm:p-6 lg:p-8', // Progressive padding
+      lg: 'p-6 sm:p-8 lg:p-12' // Generous padding for large layouts
     };
     
     return paddingClasses[padding];
@@ -77,8 +77,9 @@ export function MainLayout({
       
       {/* Main Content Area */}
       <div className={cn(
-        'flex-1 flex flex-col min-w-0 transition-all duration-300',
-        sidebar.isCollapsed ? 'lg:ml-16' : 'lg:ml-80'
+        'flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out',
+        // Use dynamic sidebar width from store
+        sidebar.isCollapsed ? 'lg:ml-16' : `lg:ml-[${sidebar.width}px]`
       )}>
         {/* Header */}
         <Header />
@@ -88,7 +89,7 @@ export function MainLayout({
           <div className="border-b bg-muted/30 transition-all duration-300">
             <div className={cn(
               getContainerClasses(),
-              'px-6 py-3'
+              'px-4 sm:px-6 lg:px-8 py-3'
             )}>
               <Breadcrumbs items={breadcrumbs} />
             </div>
@@ -112,7 +113,7 @@ export function MainLayout({
         <footer className="border-t bg-muted/50 mt-auto">
           <div className={cn(
             getContainerClasses(),
-            'px-6 py-8'
+            'px-4 sm:px-6 lg:px-8 py-6 sm:py-8'
           )}>
             <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
               <div className="flex items-center space-x-2">
@@ -140,14 +141,6 @@ export function MainLayout({
         </footer>
       </div>
       
-      {/* Mobile Overlay */}
-      {!sidebar.isCollapsed && viewport.isMobile && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
-          onClick={() => {/* Will be handled by sidebar component */}}
-          aria-hidden="true"
-        />
-      )}
     </div>
   );
 }

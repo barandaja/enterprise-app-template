@@ -45,35 +45,27 @@ export function Header({ className }: HeaderProps) {
       )}
       data-testid="main-header"
     >
-      <div className="flex h-16 items-center justify-between px-6">
+      <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
         {/* Left Section */}
         <div className="flex items-center space-x-4">
-          {/* Mobile Sidebar Toggle */}
+          {/* Unified Sidebar Toggle */}
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleSidebar}
-            className="lg:hidden"
+            className="flex hover:bg-accent/80 transition-all duration-200 focus:ring-2 focus:ring-primary/20"
             aria-label={sidebar.isCollapsed ? 'Open sidebar' : 'Close sidebar'}
-            data-testid="mobile-sidebar-toggle"
+            data-testid="sidebar-toggle"
+            title={sidebar.isCollapsed ? 'Open sidebar (⌘+B)' : 'Close sidebar (⌘+B)'}
           >
             {sidebar.isCollapsed ? (
-              <Menu className="h-5 w-5" />
+              <Menu className="h-5 w-5 transition-transform duration-200 hover:scale-110" />
             ) : (
-              <X className="h-5 w-5" />
+              <>
+                <X className="h-5 w-5 lg:hidden transition-transform duration-200 hover:scale-110" />
+                <Menu className="h-5 w-5 hidden lg:block transition-transform duration-200 hover:scale-110" />
+              </>
             )}
-          </Button>
-
-          {/* Desktop Sidebar Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidebar}
-            className="hidden lg:flex"
-            aria-label={sidebar.isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            data-testid="desktop-sidebar-toggle"
-          >
-            <Menu className="h-5 w-5" />
           </Button>
 
           {/* Logo (hidden when sidebar is expanded on larger screens) */}
@@ -97,18 +89,25 @@ export function Header({ className }: HeaderProps) {
         <div className="flex-1 max-w-md mx-4">
           <form onSubmit={handleSearch} className="relative">
             <div className={cn(
-              'relative transition-all duration-200',
-              isSearchExpanded ? 'w-full' : 'w-full sm:w-80'
+              'relative transition-all duration-300 ease-out',
+              isSearchExpanded ? 'w-full scale-105' : 'w-full sm:w-80'
             )}>
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Search className={cn(
+                "absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 transition-colors duration-200",
+                isSearchExpanded ? "text-primary" : "text-muted-foreground"
+              )} />
               <Input
                 type="text"
-                placeholder="Search..."
+                placeholder="Search across your workspace..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={() => setIsSearchExpanded(true)}
                 onBlur={() => setIsSearchExpanded(false)}
-                className="pl-10 pr-4 h-9 w-full bg-muted/50 border-0 focus:bg-background focus:ring-2 focus:ring-primary/20"
+                className={cn(
+                  "pl-10 pr-4 h-9 w-full transition-all duration-200",
+                  "bg-muted/50 border-0 focus:bg-background focus:ring-2 focus:ring-primary/20 focus:shadow-sm",
+                  isSearchExpanded && "bg-background shadow-sm"
+                )}
                 data-testid="global-search"
                 aria-label="Global search"
               />

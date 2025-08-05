@@ -27,6 +27,11 @@ export function UserMenu({ user, className }: UserMenuProps) {
   const navigate = useNavigate();
   const menuRef = useClickOutside<HTMLDivElement>(() => setIsOpen(false));
 
+  // Handle missing user gracefully
+  if (!user) {
+    return null;
+  }
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -119,7 +124,7 @@ export function UserMenu({ user, className }: UserMenuProps) {
                   {user.firstName || user.email?.split('@')[0] || 'User'} {user.lastName || ''}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">
-                  {user.email}
+                  {user.email || 'No email'}
                 </p>
                 <div className="flex items-center mt-1">
                   <span className={cn(
@@ -128,7 +133,7 @@ export function UserMenu({ user, className }: UserMenuProps) {
                     user.role === 'moderator' && 'bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400',
                     user.role === 'user' && 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400'
                   )}>
-                    {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                    {user.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'User'}
                   </span>
                 </div>
               </div>

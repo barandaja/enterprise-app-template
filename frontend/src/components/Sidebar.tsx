@@ -164,9 +164,16 @@ export function Sidebar({ className }: SidebarProps) {
       {/* Mobile Backdrop */}
       {!sidebar.isCollapsed && (
         <div 
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity duration-300 backdrop-blur-sm"
           onClick={toggleSidebar}
           aria-hidden="true"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              toggleSidebar();
+            }
+          }}
         />
       )}
 
@@ -175,12 +182,10 @@ export function Sidebar({ className }: SidebarProps) {
         className={cn(
           'fixed left-0 top-0 z-50 h-full bg-card border-r border-border transition-all duration-300 ease-in-out',
           'lg:sticky lg:top-16 lg:h-[calc(100vh-4rem)]', // On desktop, account for header height
-          sidebar.isCollapsed ? '-translate-x-full lg:translate-x-0 lg:w-16' : 'w-80 lg:w-80',
+          sidebar.isCollapsed ? '-translate-x-full lg:translate-x-0 lg:w-16' : `w-80 lg:w-[${sidebar.width}px]`,
+          'hover:shadow-lg lg:hover:shadow-none', // Subtle elevation on mobile hover
           className
         )}
-        style={{
-          width: sidebar.isCollapsed ? (window.innerWidth >= 1024 ? '4rem' : '0') : '20rem'
-        }}
         data-testid="sidebar"
       >
         <div className="flex flex-col h-full">
@@ -258,16 +263,17 @@ export function Sidebar({ className }: SidebarProps) {
                     key={item.href}
                     to={item.href}
                     className={cn(
-                      'flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200',
-                      'hover:bg-accent hover:text-accent-foreground',
-                      'focus:outline-none focus:ring-2 focus:ring-primary/20',
-                      active && 'bg-primary text-primary-foreground hover:bg-primary/90',
+                      'group relative flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200',
+                      'hover:bg-accent hover:text-accent-foreground hover:shadow-sm',
+                      'focus:outline-none focus:ring-2 focus:ring-primary/20 focus:bg-accent/50',
+                      'active:scale-95', // Subtle press feedback
+                      active && 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm',
                       sidebar.isCollapsed && 'lg:justify-center lg:space-x-0'
                     )}
                     title={sidebar.isCollapsed ? item.label : undefined}
                     data-testid={`nav-item-${item.href.replace('/', '') || 'home'}`}
                   >
-                    {Icon && <Icon className="h-5 w-5 flex-shrink-0" />}
+                    {Icon && <Icon className="h-5 w-5 flex-shrink-0 transition-transform duration-200 group-hover:scale-110" />}
                     {!sidebar.isCollapsed && (
                       <span className="truncate">{item.label}</span>
                     )}

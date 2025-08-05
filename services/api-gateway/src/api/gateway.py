@@ -161,6 +161,25 @@ async def user_service_proxy(
     )
 
 
+# Security event endpoints - must be defined before the dynamic proxy
+@router.post("/security/events")
+async def security_events_root(request: Request):
+    """Handle security event logging from frontend (root path)."""
+    return await _handle_security_events(request)
+
+
+@router.post(f"{settings.api_v1_str}/security/events")
+async def security_events_api_v1(request: Request):
+    """Handle security event logging from frontend (API v1 path).""" 
+    return await _handle_security_events(request)
+
+
+@router.post("/api/security/events")
+async def security_events_api(request: Request):
+    """Handle security event logging from frontend (legacy API path).""" 
+    return await _handle_security_events(request)
+
+
 @router.api_route(
     f"{settings.api_v1_str}/{{service_name}}/{{path:path}}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
@@ -231,24 +250,6 @@ async def _handle_security_events(request: Request):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to process security events"
         )
-
-
-@router.post("/security/events")
-async def security_events_root(request: Request):
-    """Handle security event logging from frontend (root path)."""
-    return await _handle_security_events(request)
-
-
-@router.post(f"{settings.api_v1_str}/security/events")
-async def security_events_api_v1(request: Request):
-    """Handle security event logging from frontend (API v1 path).""" 
-    return await _handle_security_events(request)
-
-
-@router.post("/api/security/events")
-async def security_events_api(request: Request):
-    """Handle security event logging from frontend (legacy API path).""" 
-    return await _handle_security_events(request)
 
 
 @router.get(f"{settings.api_v1_str}/docs")

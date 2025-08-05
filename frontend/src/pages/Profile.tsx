@@ -17,7 +17,6 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useAuthUser } from '../stores/authStore';
-import { MainLayout } from '../layouts/MainLayout';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/Card';
 import { Button } from '../components/Button';
 import { Alert } from '../components/Alert';
@@ -83,8 +82,10 @@ function formatRelativeTime(dateString: string) {
   return `${diffInWeeks} weeks ago`;
 }
 
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+function getInitials(firstName?: string, lastName?: string) {
+  const firstInitial = firstName?.charAt(0) || '';
+  const lastInitial = lastName?.charAt(0) || '';
+  return `${firstInitial}${lastInitial}`.toUpperCase() || 'U';
 }
 
 interface StatCardProps {
@@ -132,20 +133,18 @@ function Profile({ className }: PageProps) {
   // Handle missing user data gracefully
   if (!user) {
     return (
-      <MainLayout breadcrumbs={breadcrumbs}>
-        <Alert variant="warning" className="mb-6">
-          <AlertCircle className="h-4 w-4" />
-          <div>
-            <h4 className="font-semibold">Profile data unavailable</h4>
-            <p>Unable to load user profile information. Please try refreshing the page.</p>
-          </div>
-        </Alert>
-      </MainLayout>
+      <Alert variant="warning" className="mb-6">
+        <AlertCircle className="h-4 w-4" />
+        <div>
+          <h4 className="font-semibold">Profile data unavailable</h4>
+          <p>Unable to load user profile information. Please try refreshing the page.</p>
+        </div>
+      </Alert>
     );
   }
 
   return (
-    <MainLayout breadcrumbs={breadcrumbs} className={className}>
+    <div className={className}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
@@ -213,7 +212,7 @@ function Profile({ className }: PageProps) {
                   {user.avatar ? (
                     <img
                       src={user.avatar}
-                      alt={`${user.firstName} ${user.lastName}`}
+                      alt={`${user.firstName || ''} ${user.lastName || ''}`}
                       className="w-24 h-24 rounded-full mx-auto object-cover border-4 border-background shadow-lg"
                     />
                   ) : (
@@ -228,7 +227,7 @@ function Profile({ className }: PageProps) {
                 {/* Basic Info */}
                 <div className="mb-6">
                   <h2 className="text-2xl font-bold text-foreground mb-1">
-                    {user.firstName} {user.lastName}
+                    {user.firstName || 'Unknown'} {user.lastName || 'User'}
                   </h2>
                   <div className="flex items-center justify-center space-x-2 mb-4">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
@@ -237,7 +236,7 @@ function Profile({ className }: PageProps) {
                         : 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
                     }`}>
                       <Shield className="h-3 w-3 mr-1" />
-                      {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                      {user.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'User'}
                     </span>
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       user.isActive
@@ -253,7 +252,7 @@ function Profile({ className }: PageProps) {
                 <div className="space-y-3 text-left">
                   <div className="flex items-center space-x-3 text-sm">
                     <Mail className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                    <span className="text-foreground truncate">{user.email}</span>
+                    <span className="text-foreground truncate">{user.email || 'No email'}</span>
                   </div>
                   <div className="flex items-center space-x-3 text-sm">
                     <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0" />
@@ -297,7 +296,7 @@ function Profile({ className }: PageProps) {
                       Full Name
                     </label>
                     <p className="text-foreground font-medium">
-                      {user.firstName} {user.lastName}
+                      {user.firstName || 'Unknown'} {user.lastName || 'User'}
                     </p>
                   </div>
                   <div>
@@ -305,7 +304,7 @@ function Profile({ className }: PageProps) {
                       Email Address
                     </label>
                     <div className="flex items-center space-x-2">
-                      <p className="text-foreground font-medium">{user.email}</p>
+                      <p className="text-foreground font-medium">{user.email || 'No email'}</p>
                       <CheckCircle className="h-4 w-4 text-green-500" />
                     </div>
                   </div>
@@ -439,7 +438,7 @@ function Profile({ className }: PageProps) {
           </CardContent>
         </Card>
       </div>
-    </MainLayout>
+    </div>
   );
 }
 

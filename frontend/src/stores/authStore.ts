@@ -24,7 +24,9 @@ import type {
   SessionId,
   StoreEventEmitter,
   EventKey,
-  StoreEvent,
+  StoreEvent
+} from './types';
+import {
   createUserId,
   createAccessToken,
   createRefreshToken,
@@ -54,6 +56,7 @@ interface AuthState extends BaseStore, AsyncStoreMixin<AuthState> {
   readonly refreshToken: RefreshToken | null;
   readonly sessionId: SessionId | null;
   readonly isAuthenticated: boolean;
+  readonly isRefreshing: boolean;
   
   // Advanced async state management
   readonly authState: AsyncState<User>;
@@ -247,16 +250,37 @@ interface TokenPayload {
   readonly scope?: string[];
 }
 
+// Helper function to transform backend user to frontend User type
+const transformBackendUser = (backendUser: any): User => {
+  return {
+    id: String(backendUser.id),
+    email: backendUser.email,
+    firstName: backendUser.first_name || '',
+    lastName: backendUser.last_name || '',
+    avatar: backendUser.avatar,
+    role: backendUser.is_superuser ? 'admin' : 'user', // Map is_superuser to role
+    isActive: backendUser.is_active,
+    createdAt: backendUser.created_at,
+    updatedAt: backendUser.updated_at,
+  };
+};
+
 // API service integration
 const authApi = {
   async login(credentials: LoginCredentials): Promise<ApiResponse<{ user: User; tokens: { accessToken: string; refreshToken: string } }>> {
     const response = await authService.login(credentials);
     if (response.success) {
+      // Transform the backend response to match our expected format
+      // Backend sends access_token and refresh_token at top level
+      const backendData = response.data as any;
       return {
         success: true,
         data: {
-          user: response.data.user,
-          tokens: response.data.tokens,
+          user: transformBackendUser(backendData.user),
+          tokens: {
+            accessToken: backendData.access_token,
+            refreshToken: backendData.refresh_token,
+          },
         },
         meta: response.meta,
       };
@@ -389,15 +413,35 @@ window.addEventListener('session-timeout', () => {
 export const useAuthStore = create<AuthStore>()(
   devtools(
     immer((set, get) => ({
-        // Initial state
+        // Initial state with all required fields
         user: null,
+        userId: null,
         token: null,
         refreshToken: null,
+        sessionId: null,
         isAuthenticated: false,
         isLoading: false,
         isInitializing: true,
         error: null,
         isRefreshing: false,
+        
+        // Async state management
+        authState: { status: 'idle', data: null, error: null, loading: false },
+        tokenState: { status: 'idle', data: null, error: null, loading: false },
+        refreshState: { status: 'idle', data: null, error: null, loading: false },
+        
+        // Session management
+        sessionExpiry: null,
+        sessionStartTime: null,
+        lastActivity: null,
+        
+        // Security context
+        securityContext: {
+          ipAddress: null,
+          userAgent: null,
+          deviceFingerprint: null,
+          location: null,
+        },
 
         // Authentication actions
         login: async (credentials: LoginCredentials) => {
@@ -417,22 +461,40 @@ export const useAuthStore = create<AuthStore>()(
             console.log('[authStore] Login response:', response);
             console.log('[authStore] Response data:', response.data);
             
-            // The actual API response has access_token, refresh_token, and user at the top level
-            const { user, access_token, refresh_token } = response.data;
+            // Extract data based on the transformed response structure
+            const { user, tokens } = response.data;
+            const { accessToken, refreshToken } = tokens;
+
+            // Validate tokens exist
+            if (!accessToken) {
+              console.error('[authStore] No access token in response:', response.data);
+              throw new ApiError('No access token received from server', 'AUTH_NO_TOKEN');
+            }
 
             // Store tokens using TokenManager
             await tokenManager.setTokens({
-              accessToken: access_token,
-              refreshToken: refresh_token
+              accessToken,
+              refreshToken
             });
             
             set((state) => {
               state.user = user;
-              state.token = access_token;
-              state.refreshToken = refresh_token;
+              state.userId = createUserId(user.id);
+              // Use helper functions to create branded types
+              state.token = createAccessToken(accessToken);
+              state.refreshToken = createRefreshToken(refreshToken);
               state.isAuthenticated = true;
               state.isLoading = false;
               state.error = null;
+              state.sessionStartTime = Date.now();
+              state.lastActivity = Date.now();
+              
+              // Update security context
+              const currentContext = getCurrentSecurityContext();
+              state.securityContext = {
+                ...state.securityContext,
+                ...currentContext,
+              };
             });
 
             // Log security event
@@ -484,8 +546,9 @@ export const useAuthStore = create<AuthStore>()(
             
             set((state) => {
               state.user = user;
-              state.token = tokens.accessToken;
-              state.refreshToken = tokens.refreshToken;
+              // Use helper functions to create branded types
+              state.token = createAccessToken(tokens.accessToken);
+              state.refreshToken = createRefreshToken(tokens.refreshToken);
               state.isAuthenticated = true;
               state.isLoading = false;
               state.error = null;
@@ -535,8 +598,9 @@ export const useAuthStore = create<AuthStore>()(
             const tokens = await tokenManager.forceRefresh();
             
             set((state) => {
-              state.token = tokens.accessToken;
-              state.refreshToken = tokens.refreshToken;
+              // Use helper functions to create branded types
+              state.token = createAccessToken(tokens.accessToken);
+              state.refreshToken = createRefreshToken(tokens.refreshToken);
               state.isRefreshing = false;
             });
             
@@ -575,8 +639,9 @@ export const useAuthStore = create<AuthStore>()(
           });
           
           set((state) => {
-            state.token = token;
-            state.refreshToken = refreshToken;
+            // Use helper functions to create branded types
+            state.token = createAccessToken(token);
+            state.refreshToken = createRefreshToken(refreshToken);
             state.isAuthenticated = true;
           });
         },
@@ -657,14 +722,31 @@ export const useAuthStore = create<AuthStore>()(
                 const validToken = await tokenManager.getValidToken();
                 
                 set((state) => {
-                  state.token = validToken;
-                  state.refreshToken = tokens.refreshToken;
+                  // Use helper functions to create branded types
+                  state.token = createAccessToken(validToken);
+                  state.refreshToken = createRefreshToken(tokens.refreshToken);
                   state.isAuthenticated = true;
                   state.isInitializing = false;
+                  state.lastActivity = Date.now();
                 });
                 
                 // Fetch user data if we have a valid token
-                // Note: You might want to add a getCurrentUser API call here
+                try {
+                  const userResponse = await userService.getProfile();
+                  if (userResponse.success) {
+                    // Transform backend user to frontend User type
+                    const user = transformBackendUser(userResponse.data);
+                    set((state) => {
+                      state.user = user;
+                      state.userId = createUserId(user.id);
+                    });
+                  } else {
+                    console.warn('[authStore] Failed to fetch user profile:', userResponse.message);
+                  }
+                } catch (userError) {
+                  console.warn('[authStore] Error fetching user profile:', userError);
+                  // Don't fail initialization if user fetch fails, tokens are still valid
+                }
               } catch (refreshError) {
                 // Token refresh failed, clear auth state
                 await get().logout();
@@ -683,8 +765,9 @@ export const useAuthStore = create<AuthStore>()(
             tokenManager.onTokenChange((newTokens) => {
               if (newTokens) {
                 set((state) => {
-                  state.token = newTokens.accessToken;
-                  state.refreshToken = newTokens.refreshToken;
+                  // Use helper functions to create branded types
+                  state.token = createAccessToken(newTokens.accessToken);
+                  state.refreshToken = createRefreshToken(newTokens.refreshToken);
                   state.isAuthenticated = true;
                 });
               } else {
@@ -707,7 +790,7 @@ export const useAuthStore = create<AuthStore>()(
 
         // Utility actions
         isTokenExpired: (token: string): boolean => {
-          const payload = decodeToken(token);
+          const payload = decodeToken(token as AccessToken);
           if (!payload) return true;
 
           const currentTime = Math.floor(Date.now() / 1000);
@@ -718,6 +801,155 @@ export const useAuthStore = create<AuthStore>()(
           // Deprecated - TokenManager handles automatic refresh scheduling
           console.warn('scheduleRefresh is deprecated. TokenManager handles automatic token refresh.');
         },
+
+        // Additional required methods for the interface
+        silentLogin: async () => {
+          // This is essentially what initialize() does
+          try {
+            await get().initialize();
+            return get().isAuthenticated;
+          } catch {
+            return false;
+          }
+        },
+
+        validateToken: async (token: AccessToken) => {
+          try {
+            return !get().isTokenExpired(token);
+          } catch {
+            return false;
+          }
+        },
+
+        getCurrentUser: async () => {
+          try {
+            const userResponse = await userService.getProfile();
+            if (userResponse.success) {
+              // Transform backend user to frontend User type
+              const user = transformBackendUser(userResponse.data);
+              
+              set((state) => {
+                state.user = user;
+                state.userId = createUserId(user.id);
+              });
+              return user;
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        },
+
+        extendSession: async () => {
+          set((state) => {
+            state.lastActivity = Date.now();
+          });
+        },
+
+        checkSessionValidity: () => {
+          const state = get();
+          if (!state.isAuthenticated || !state.sessionStartTime) return false;
+          
+          // Check if session is still valid (example: 24 hours)
+          const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
+          const elapsed = Date.now() - state.sessionStartTime;
+          return elapsed < sessionTimeout;
+        },
+
+        updateLastActivity: () => {
+          set((state) => {
+            state.lastActivity = Date.now();
+          });
+        },
+
+        updateSecurityContext: (context: Partial<SecurityContext>) => {
+          set((state) => {
+            state.securityContext = {
+              ...state.securityContext,
+              ...context,
+            };
+          });
+        },
+
+        reportSecurityEvent: (event: SecurityEvent) => {
+          logSecurityEvent(event);
+        },
+
+        reset: () => {
+          set((state) => {
+            state.user = null;
+            state.userId = null;
+            state.token = null;
+            state.refreshToken = null;
+            state.sessionId = null;
+            state.isAuthenticated = false;
+            state.isLoading = false;
+            state.isInitializing = false;
+            state.error = null;
+            state.isRefreshing = false;
+            state.authState = { status: 'idle', data: null, error: null, loading: false };
+            state.tokenState = { status: 'idle', data: null, error: null, loading: false };
+            state.refreshState = { status: 'idle', data: null, error: null, loading: false };
+            state.sessionExpiry = null;
+            state.sessionStartTime = null;
+            state.lastActivity = null;
+            state.securityContext = {
+              ipAddress: null,
+              userAgent: null,
+              deviceFingerprint: null,
+              location: null,
+            };
+          });
+        },
+
+        getTokenExpiry: (token: AccessToken) => {
+          const payload = decodeToken(token);
+          if (!payload || !payload.exp) return null;
+          return new Date(payload.exp * 1000);
+        },
+
+        hasPendingOperations: () => {
+          const state = get();
+          return state.isLoading || state.isRefreshing || state.isInitializing;
+        },
+
+        waitForInitialization: async () => {
+          return new Promise<void>((resolve) => {
+            const check = () => {
+              if (!get().isInitializing) {
+                resolve();
+              } else {
+                setTimeout(check, 100);
+              }
+            };
+            check();
+          });
+        },
+
+        assertAuthenticated(): asserts this is AuthStore & { isAuthenticated: true; user: User; userId: UserId } {
+          const state = get();
+          if (!state.isAuthenticated || !state.user || !state.userId) {
+            throw new Error('User is not authenticated');
+          }
+        },
+
+        assertTokenValid: (token: AccessToken) => {
+          assertAccessToken(token);
+          if (get().isTokenExpired(token)) {
+            throw new Error('Token is expired');
+          }
+        },
+
+        // Event emitter methods (simplified implementation)
+        on: () => () => {}, // Return cleanup function
+        off: () => {},
+        emit: () => {},
+
+        // Store metadata
+        storeId: generateStoreId(),
+        version: STORE_VERSION,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
       })),
     {
       name: 'auth-store',

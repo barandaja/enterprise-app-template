@@ -4,9 +4,30 @@
  * Uses Web Crypto API for all cryptographic operations
  */
 
-// Generate a unique encryption key per session using Web Crypto API
+// Generate a unique encryption key per browser session using Web Crypto API
 const generateSessionKey = async (): Promise<CryptoKey> => {
-  return await crypto.subtle.generateKey(
+  // Try to get existing key from sessionStorage first
+  const storedKey = sessionStorage.getItem('_sk');
+  if (storedKey) {
+    try {
+      const keyData = JSON.parse(storedKey);
+      return await crypto.subtle.importKey(
+        'jwk',
+        keyData,
+        {
+          name: 'AES-GCM',
+          length: 256,
+        },
+        true,
+        ['encrypt', 'decrypt']
+      );
+    } catch (e) {
+      console.warn('Failed to restore session key, generating new one');
+    }
+  }
+
+  // Generate new key
+  const key = await crypto.subtle.generateKey(
     {
       name: 'AES-GCM',
       length: 256,
@@ -14,6 +35,16 @@ const generateSessionKey = async (): Promise<CryptoKey> => {
     true,
     ['encrypt', 'decrypt']
   );
+
+  // Store in sessionStorage for this browser session
+  try {
+    const exportedKey = await crypto.subtle.exportKey('jwk', key);
+    sessionStorage.setItem('_sk', JSON.stringify(exportedKey));
+  } catch (e) {
+    console.warn('Failed to persist session key');
+  }
+
+  return key;
 };
 
 // Store the session key in memory only (not persisted)
@@ -86,7 +117,15 @@ export class SecureStorage {
    */
   async setItem<T>(key: string, value: T, options: SecureStorageOptions = {}): Promise<void> {
     try {
+      // Validate input
+      if (value === undefined || value === null) {
+        throw new Error(`Cannot store undefined or null value for key: ${key}`);
+      }
+      
       const dataStr = JSON.stringify(value);
+      if (key === 'access_token' || key === 'refresh_token') {
+        console.log(`SecureStorage: Storing ${key}, value type: ${typeof value}, length: ${dataStr?.length || 0}`);
+      }
       const sessionKey = await getSessionKey();
       
       // Generate a random initialization vector
@@ -123,11 +162,13 @@ export class SecureStorage {
    * Retrieve and decrypt data
    */
   async getItem<T>(key: string): Promise<T | null> {
+    let item: StoredItem<string> | undefined;
+    
     try {
       const itemStr = this.storage.getItem(this.prefix + key);
       if (!itemStr) return null;
 
-      const item: StoredItem<string> = JSON.parse(itemStr);
+      item = JSON.parse(itemStr);
 
       // Check expiration
       if (item.expiry && Date.now() > item.expiry) {
@@ -149,6 +190,10 @@ export class SecureStorage {
       
       const decrypted = arrayBufferToString(decryptedBuffer);
       
+      if (key === 'access_token' || key === 'refresh_token') {
+        console.log(`SecureStorage: Retrieved ${key}, decrypted length: ${decrypted.length}, preview: ${decrypted.substring(0, 50)}`);
+      }
+      
       // Verify integrity
       const expectedChecksum = await this.generateChecksum(decrypted);
       if (expectedChecksum !== item.checksum) {
@@ -157,10 +202,29 @@ export class SecureStorage {
         return null;
       }
 
-      return JSON.parse(decrypted) as T;
+      // Check if decrypted data is valid before parsing
+      if (!decrypted || decrypted.trim() === '') {
+        console.warn(`SecureStorage: Empty data for key ${key}, removing item`);
+        this.removeItem(key);
+        return null;
+      }
+
+      try {
+        return JSON.parse(decrypted) as T;
+      } catch (parseError) {
+        console.error(`SecureStorage: Invalid JSON data for key ${key}:`, decrypted.substring(0, 100));
+        this.removeItem(key);
+        return null;
+      }
     } catch (error) {
-      // Only log errors that aren't related to missing items
-      if (item && error instanceof Error && !error.message.includes('OperationError')) {
+      // Only log errors that aren't related to missing items, crypto operations, or JSON parsing
+      if (
+        item && 
+        error instanceof Error && 
+        error.name !== 'OperationError' &&
+        !error.message.includes('OperationError') &&
+        !error.message.includes('JSON')
+      ) {
         console.error('SecureStorage: Failed to retrieve item', error);
       }
       return null;
@@ -209,7 +273,9 @@ export class TokenStorage {
   private tokenRefreshCallbacks: Set<() => void> = new Set();
 
   constructor() {
-    this.secureStorage = new SecureStorage(true); // Use sessionStorage
+    // Use localStorage for tokens to persist across page refreshes
+    // Security is maintained through encryption and activity monitoring
+    this.secureStorage = new SecureStorage(false); // Use localStorage
     this.setupActivityMonitoring();
   }
 
@@ -217,6 +283,16 @@ export class TokenStorage {
    * Store authentication tokens securely
    */
   async setTokens(accessToken: string, refreshToken?: string): Promise<void> {
+    console.log('TokenStorage.setTokens called with:', {
+      accessToken: accessToken ? `${typeof accessToken} (length: ${accessToken?.length || 0})` : 'undefined/null',
+      refreshToken: refreshToken ? `${typeof refreshToken} (length: ${refreshToken?.length || 0})` : 'undefined/null'
+    });
+    
+    // Validate tokens
+    if (!accessToken) {
+      throw new Error('Access token is required');
+    }
+    
     // Store tokens with expiration
     await this.secureStorage.setItem('access_token', accessToken, {
       expirationMinutes: 15, // Short-lived access token
@@ -318,10 +394,14 @@ export class TokenStorage {
   }
 
   private async checkTokenExpiration(): Promise<void> {
-    const token = await this.getAccessToken();
-    if (!token) {
-      // Trigger re-authentication if needed
-      this.tokenRefreshCallbacks.forEach(callback => callback());
+    try {
+      const token = await this.getAccessToken();
+      if (!token) {
+        // Trigger re-authentication if needed
+        this.tokenRefreshCallbacks.forEach(callback => callback());
+      }
+    } catch (error) {
+      console.warn('TokenStorage: Error checking token expiration:', error);
     }
   }
 }

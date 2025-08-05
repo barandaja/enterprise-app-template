@@ -124,7 +124,7 @@ export function useClickOutside<T extends HTMLElement = HTMLElement>(
       });
 
       // If click is outside refs and not in ignored elements, call callback
-      if (!isInsideRefs && !isInsideIgnored) {
+      if (!isInsideRefs && !isInsideIgnored && typeof callbackRef.current === 'function') {
         callbackRef.current(event);
       }
     };
