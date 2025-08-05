@@ -65,6 +65,11 @@ run_debug.py
 *_FIX_*.md
 *_ERROR_*.md
 *_RESOLUTION.md
+*_IMPLEMENTATION.md
+BACKEND_AUTH_ISSUE.md
+Claude.md
+frontend/icon-test.html
+frontend/registration-errors-analysis.md
 
 # Cache files
 *.pyc
