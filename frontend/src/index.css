@@ -1,56 +1,202 @@
 @import "tailwindcss";
 
-/* CSS Variables for Dark/Light Mode */
+/* Register custom colors with Tailwind v4 */
+@theme {
+  /* Primary color scale */
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  --color-primary: #3b82f6;
+  --color-primary-foreground: #ffffff;
+
+  /* Gray color scale */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+
+  /* Secondary color scale */
+  --color-secondary-50: #f8fafc;
+  --color-secondary-100: #f1f5f9;
+  --color-secondary-200: #e2e8f0;
+  --color-secondary-300: #cbd5e1;
+  --color-secondary-400: #94a3b8;
+  --color-secondary-500: #64748b;
+  --color-secondary-600: #475569;
+  --color-secondary-700: #334155;
+  --color-secondary-800: #1e293b;
+  --color-secondary-900: #0f172a;
+  --color-secondary: #f1f5f9;
+  --color-secondary-foreground: #0f172a;
+
+  /* Success color scale */
+  --color-success-50: #f0fdf4;
+  --color-success-100: #dcfce7;
+  --color-success-200: #bbf7d0;
+  --color-success-300: #86efac;
+  --color-success-400: #4ade80;
+  --color-success-500: #22c55e;
+  --color-success-600: #16a34a;
+  --color-success-700: #15803d;
+  --color-success-800: #166534;
+  --color-success-900: #14532d;
+  --color-success: #22c55e;
+  --color-success-foreground: #ffffff;
+
+  /* Warning color scale */
+  --color-warning-50: #fffbeb;
+  --color-warning-100: #fef3c7;
+  --color-warning-200: #fde68a;
+  --color-warning-300: #fcd34d;
+  --color-warning-400: #fbbf24;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+  --color-warning-800: #92400e;
+  --color-warning-900: #78350f;
+  --color-warning: #f59e0b;
+  --color-warning-foreground: #ffffff;
+
+  /* Destructive/Error color scale */
+  --color-destructive-50: #fef2f2;
+  --color-destructive-100: #fee2e2;
+  --color-destructive-200: #fecaca;
+  --color-destructive-300: #fca5a5;
+  --color-destructive-400: #f87171;
+  --color-destructive-500: #ef4444;
+  --color-destructive-600: #dc2626;
+  --color-destructive-700: #b91c1c;
+  --color-destructive-800: #991b1b;
+  --color-destructive-900: #7f1d1d;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+
+  /* Info color scale */
+  --color-info-50: #eff6ff;
+  --color-info-100: #dbeafe;
+  --color-info-200: #bfdbfe;
+  --color-info-300: #93c5fd;
+  --color-info-400: #60a5fa;
+  --color-info-500: #3b82f6;
+  --color-info-600: #2563eb;
+  --color-info-700: #1d4ed8;
+  --color-info-800: #1e40af;
+  --color-info-900: #1e3a8a;
+  --color-info: #3b82f6;
+  --color-info-foreground: #ffffff;
+
+  /* Red color scale */
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-200: #fecaca;
+  --color-red-300: #fca5a5;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-red-700: #b91c1c;
+  --color-red-800: #991b1b;
+  --color-red-900: #7f1d1d;
+
+  /* Green color scale */
+  --color-green-50: #f0fdf4;
+  --color-green-100: #dcfce7;
+  --color-green-200: #bbf7d0;
+  --color-green-300: #86efac;
+  --color-green-400: #4ade80;
+  --color-green-500: #22c55e;
+  --color-green-600: #16a34a;
+  --color-green-700: #15803d;
+  --color-green-800: #166534;
+  --color-green-900: #14532d;
+
+  /* Blue color scale */
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-300: #93c5fd;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+  --color-blue-800: #1e40af;
+  --color-blue-900: #1e3a8a;
+
+  /* Yellow color scale */
+  --color-yellow-50: #fefce8;
+  --color-yellow-100: #fef3c7;
+  --color-yellow-200: #fde68a;
+  --color-yellow-300: #fcd34d;
+  --color-yellow-400: #fbbf24;
+  --color-yellow-500: #f59e0b;
+  --color-yellow-600: #d97706;
+  --color-yellow-700: #b45309;
+  --color-yellow-800: #92400e;
+  --color-yellow-900: #78350f;
+
+  /* UI Colors */
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #3b82f6;
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  --color-muted: #f8fafc;
+  --color-muted-foreground: #64748b;
+  --color-accent: #f1f5f9;
+  --color-accent-foreground: #0f172a;
+}
+
+/* CSS Variables for Dynamic Dark/Light Mode */
 :root {
-  /* Light mode colors */
-  --color-background: 255 255 255;
-  --color-foreground: 15 23 42;
-  --color-card: 255 255 255;
-  --color-card-foreground: 15 23 42;
-  --color-popover: 255 255 255;
-  --color-popover-foreground: 15 23 42;
-  --color-primary: 59 130 246;
-  --color-primary-foreground: 255 255 255;
-  --color-secondary: 241 245 249;
-  --color-secondary-foreground: 15 23 42;
-  --color-muted: 248 250 252;
-  --color-muted-foreground: 100 116 139;
-  --color-accent: 241 245 249;
-  --color-accent-foreground: 15 23 42;
-  --color-destructive: 239 68 68;
-  --color-destructive-foreground: 255 255 255;
-  --color-border: 226 232 240;
-  --color-input: 226 232 240;
-  --color-ring: 59 130 246;
-  --color-success: 34 197 94;
-  --color-warning: 251 191 36;
-  --color-info: 59 130 246;
+  /* Light mode overrides for dynamic colors */
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  --color-secondary: #f1f5f9;
+  --color-secondary-foreground: #0f172a;
+  --color-muted: #f8fafc;
+  --color-muted-foreground: #64748b;
+  --color-accent: #f1f5f9;
+  --color-accent-foreground: #0f172a;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
 }
 
 .dark {
-  /* Dark mode colors */
-  --color-background: 2 6 23;
-  --color-foreground: 248 250 252;
-  --color-card: 15 23 42;
-  --color-card-foreground: 248 250 252;
-  --color-popover: 15 23 42;
-  --color-popover-foreground: 248 250 252;
-  --color-primary: 59 130 246;
-  --color-primary-foreground: 255 255 255;
-  --color-secondary: 30 41 59;
-  --color-secondary-foreground: 248 250 252;
-  --color-muted: 30 41 59;
-  --color-muted-foreground: 148 163 184;
-  --color-accent: 30 41 59;
-  --color-accent-foreground: 248 250 252;
-  --color-destructive: 239 68 68;
-  --color-destructive-foreground: 255 255 255;
-  --color-border: 30 41 59;
-  --color-input: 30 41 59;
-  --color-ring: 59 130 246;
-  --color-success: 34 197 94;
-  --color-warning: 251 191 36;
-  --color-info: 59 130 246;
+  /* Dark mode overrides */
+  --color-background: #020617;
+  --color-foreground: #f8fafc;
+  --color-card: #0f172a;
+  --color-card-foreground: #f8fafc;
+  --color-popover: #0f172a;
+  --color-popover-foreground: #f8fafc;
+  --color-secondary: #1e293b;
+  --color-secondary-foreground: #f8fafc;
+  --color-muted: #1e293b;
+  --color-muted-foreground: #94a3b8;
+  --color-accent: #1e293b;
+  --color-accent-foreground: #f8fafc;
+  --color-border: #1e293b;
+  --color-input: #1e293b;
 }
 
 /* Base styles */
@@ -79,23 +225,23 @@ body {
 }
 
 .btn-primary {
-  @apply btn bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2;
+  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2;
 }
 
 .btn-secondary {
-  @apply btn bg-secondary text-secondary-foreground hover:bg-secondary/80 h-10 px-4 py-2;
+  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-secondary text-secondary-foreground hover:bg-secondary/80 h-10 px-4 py-2;
 }
 
 .btn-outline {
-  @apply btn border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2;
+  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2;
 }
 
 .btn-ghost {
-  @apply btn hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2;
+  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2;
 }
 
 .btn-destructive {
-  @apply btn bg-destructive text-destructive-foreground hover:bg-destructive/90 h-10 px-4 py-2;
+  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-10 px-4 py-2;
 }
 
 .btn-sm {
@@ -154,7 +300,7 @@ body {
 }
 
 .nav-link-active {
-  @apply nav-link bg-accent text-accent-foreground;
+  @apply inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 h-10 px-4 py-2 hover:bg-accent hover:text-accent-foreground bg-accent text-accent-foreground;
 }
 
 /* Alert components */
@@ -163,19 +309,19 @@ body {
 }
 
 .alert-destructive {
-  @apply alert border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive;
+  @apply relative w-full rounded-lg border p-4 border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive;
 }
 
 .alert-success {
-  @apply alert border-success/50 text-success dark:border-success [&>svg]:text-success;
+  @apply relative w-full rounded-lg border p-4 border-success/50 text-success dark:border-success [&>svg]:text-success;
 }
 
 .alert-warning {
-  @apply alert border-warning/50 text-warning dark:border-warning [&>svg]:text-warning;
+  @apply relative w-full rounded-lg border p-4 border-warning/50 text-warning dark:border-warning [&>svg]:text-warning;
 }
 
 .alert-info {
-  @apply alert border-info/50 text-info dark:border-info [&>svg]:text-info;
+  @apply relative w-full rounded-lg border p-4 border-info/50 text-info dark:border-info [&>svg]:text-info;
 }
 
 .alert-title {
@@ -192,19 +338,19 @@ body {
 }
 
 .badge-default {
-  @apply badge border-transparent bg-primary text-primary-foreground hover:bg-primary/80;
+  @apply inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-primary text-primary-foreground hover:bg-primary/80;
 }
 
 .badge-secondary {
-  @apply badge border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80;
+  @apply inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80;
 }
 
 .badge-destructive {
-  @apply badge border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80;
+  @apply inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80;
 }
 
 .badge-outline {
-  @apply badge text-foreground;
+  @apply inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground;
 }
 
 /* Avatar */
@@ -226,11 +372,11 @@ body {
 }
 
 .separator-horizontal {
-  @apply separator h-[1px] w-full;
+  @apply shrink-0 bg-border h-[1px] w-full;
 }
 
 .separator-vertical {
-  @apply separator h-full w-[1px];
+  @apply shrink-0 bg-border h-full w-[1px];
 }
 
 /* Loading spinner */

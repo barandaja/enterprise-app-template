@@ -18,6 +18,7 @@ export interface AgeVerificationProps {
   showParentalConsent?: boolean;
   privacyPolicyUrl?: string;
   termsUrl?: string;
+  alwaysShow?: boolean; // Force showing even if previously verified
 }
 
 const AGE_VERIFICATION_KEY = 'age_verified';
@@ -30,6 +31,7 @@ export function AgeVerification({
   showParentalConsent = true,
   privacyPolicyUrl = '/privacy',
   termsUrl = '/terms',
+  alwaysShow = false,
 }: AgeVerificationProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [birthDate, setBirthDate] = useState('');
@@ -38,12 +40,16 @@ export function AgeVerification({
   const [requiresParentalConsent, setRequiresParentalConsent] = useState(false);
 
   useEffect(() => {
-    // Check if already verified
-    const verified = checkAgeVerification();
-    if (!verified) {
+    // Check if already verified (unless alwaysShow is true)
+    if (alwaysShow) {
       setIsOpen(true);
+    } else {
+      const verified = checkAgeVerification();
+      if (!verified) {
+        setIsOpen(true);
+      }
     }
-  }, []);
+  }, [alwaysShow]);
 
   const checkAgeVerification = (): boolean => {
     try {

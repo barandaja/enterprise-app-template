@@ -14,6 +14,10 @@ import { z } from 'zod';
 import { apiClient, type ApiClient } from './client';
 import { authService, type AuthService } from './auth.service';
 import { userService, type UserService } from './user.service';
+import { notificationService, type NotificationService } from './notification.service';
+import { preferencesService, type PreferencesService } from './preferences.service';
+import { permissionsService, type PermissionsService } from './permissions.service';
+import { cacheService, type CacheService } from './cache.service';
 import type {
   ApiResponse,
   ApiSuccessResponse,
@@ -27,6 +31,8 @@ import type {
   PaginatedResponse,
   FileUploadResponse,
   UserPreferences,
+  MiddlewareFunction,
+  MiddlewareContext,
 } from './types';
 import {
   validateApiResponse,
@@ -46,10 +52,30 @@ import type { User, LoginCredentials, RegisterData, UpdateProfileData } from '..
 // =============================================================================
 
 /**
+ * User response schema
+ */
+const userSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  firstName: z.string(),
+  lastName: z.string(),
+  avatar: z.string().optional(),
+  role: z.enum(['admin', 'user', 'moderator']),
+  isActive: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+/**
  * User response validator
  */
-const userValidator = createResponseValidator(
-  z.object({
+const userValidator = createResponseValidator(userSchema);
+
+/**
+ * Login response schema
+ */
+const loginResponseSchema = z.object({
+  user: z.object({
     id: z.string(),
     email: z.string().email(),
     firstName: z.string(),
@@ -59,68 +85,80 @@ const userValidator = createResponseValidator(
     isActive: z.boolean(),
     createdAt: z.string(),
     updatedAt: z.string(),
-  })
-);
-
-/**
- * Login response validator
- */
-const loginResponseValidator = createResponseValidator(
-  z.object({
-    user: z.object({
-      id: z.string(),
-      email: z.string().email(),
-      firstName: z.string(),
-      lastName: z.string(),
-      avatar: z.string().optional(),
-      role: z.enum(['admin', 'user', 'moderator']),
-      isActive: z.boolean(),
-      createdAt: z.string(),
-      updatedAt: z.string(),
-    }),
-    tokens: z.object({
-      accessToken: z.string(),
-      refreshToken: z.string(),
-      tokenType: z.literal('Bearer'),
-      expiresIn: z.number(),
-      expiresAt: z.string(),
-      scope: z.array(z.string()).optional(),
-    }),
-    isFirstLogin: z.boolean().optional(),
-    requiresPasswordChange: z.boolean().optional(),
-    requiresTwoFactor: z.boolean().optional(),
-  })
-);
-
-/**
- * Token response validator
- */
-const tokenResponseValidator = createResponseValidator(
-  z.object({
+  }),
+  tokens: z.object({
     accessToken: z.string(),
     refreshToken: z.string(),
     tokenType: z.literal('Bearer'),
     expiresIn: z.number(),
     expiresAt: z.string(),
     scope: z.array(z.string()).optional(),
-  })
-);
+  }),
+  isFirstLogin: z.boolean().optional(),
+  requiresPasswordChange: z.boolean().optional(),
+  requiresTwoFactor: z.boolean().optional(),
+});
+
+/**
+ * Login response validator
+ */
+const loginResponseValidator = createResponseValidator(loginResponseSchema);
+
+/**
+ * Token response schema
+ */
+const tokenResponseSchema = z.object({
+  accessToken: z.string(),
+  refreshToken: z.string(),
+  tokenType: z.literal('Bearer'),
+  expiresIn: z.number(),
+  expiresAt: z.string(),
+  scope: z.array(z.string()).optional(),
+});
+
+/**
+ * Token response validator
+ */
+const tokenResponseValidator = createResponseValidator(tokenResponseSchema);
+
+/**
+ * File upload response schema
+ */
+const fileUploadSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  originalName: z.string(),
+  mimeType: z.string(),
+  size: z.number(),
+  url: z.string().url(),
+  thumbnailUrl: z.string().url().optional(),
+  uploadedAt: z.string(),
+});
 
 /**
  * File upload response validator
  */
-const fileUploadValidator = createResponseValidator(
-  z.object({
-    id: z.string(),
-    filename: z.string(),
-    originalName: z.string(),
-    mimeType: z.string(),
-    size: z.number(),
-    url: z.string().url(),
-    thumbnailUrl: z.string().url().optional(),
-    uploadedAt: z.string(),
-  })
-);
+const fileUploadValidator = createResponseValidator(fileUploadSchema);
+
+/**
+ * User preferences schema
+ */
+const userPreferencesSchema = z.object({
+  theme: z.enum(['light', 'dark', 'system']),
+  language: z.string(),
+  timezone: z.string(),
+  notifications: z.object({
+    email: z.boolean(),
+    push: z.boolean(),
+    sms: z.boolean(),
+    marketing: z.boolean(),
+  }),
+  privacy: z.object({
+    profileVisible: z.boolean(),
+    showEmail: z.boolean(),
+    allowMessaging: z.boolean(),
+  }),
+});
 
 // =============================================================================
 // API Endpoint Configurations
@@ -139,7 +177,7 @@ export const apiEndpoints: ApiEndpoints = {
         password: z.string().min(1),
         rememberMe: z.boolean().optional(),
       }),
-      responseSchema: loginResponseValidator,
+      responseSchema: loginResponseSchema,
       config: { skipAuth: true },
     },
     register: {
@@ -151,7 +189,7 @@ export const apiEndpoints: ApiEndpoints = {
         firstName: z.string().min(1),
         lastName: z.string().min(1),
       }),
-      responseSchema: loginResponseValidator,
+      responseSchema: loginResponseSchema,
       config: { skipAuth: true },
     },
     logout: {
@@ -165,7 +203,7 @@ export const apiEndpoints: ApiEndpoints = {
       requestSchema: z.object({
         refreshToken: z.string(),
       }),
-      responseSchema: tokenResponseValidator,
+      responseSchema: tokenResponseSchema,
       config: { skipAuth: true, skipRefresh: true },
     },
     passwordReset: {
@@ -224,7 +262,7 @@ export const apiEndpoints: ApiEndpoints = {
     profile: {
       method: 'GET',
       path: '/users/profile',
-      responseSchema: userValidator,
+      responseSchema: userSchema,
     },
     updateProfile: {
       method: 'PATCH',
@@ -234,12 +272,12 @@ export const apiEndpoints: ApiEndpoints = {
         lastName: z.string().optional(),
         avatar: z.string().optional(),
       }),
-      responseSchema: userValidator,
+      responseSchema: userSchema,
     },
     uploadAvatar: {
       method: 'POST',
       path: '/users/avatar',
-      responseSchema: fileUploadValidator,
+      responseSchema: fileUploadSchema,
     },
     deleteAccount: {
       method: 'POST',
@@ -252,24 +290,7 @@ export const apiEndpoints: ApiEndpoints = {
     preferences: {
       method: 'GET',
       path: '/users/preferences',
-      responseSchema: createResponseValidator(
-        z.object({
-          theme: z.enum(['light', 'dark', 'system']),
-          language: z.string(),
-          timezone: z.string(),
-          notifications: z.object({
-            email: z.boolean(),
-            push: z.boolean(),
-            sms: z.boolean(),
-            marketing: z.boolean(),
-          }),
-          privacy: z.object({
-            profileVisible: z.boolean(),
-            showEmail: z.boolean(),
-            allowMessaging: z.boolean(),
-          }),
-        })
-      ),
+      responseSchema: userPreferencesSchema,
     },
     updatePreferences: {
       method: 'PATCH',
@@ -290,24 +311,7 @@ export const apiEndpoints: ApiEndpoints = {
           allowMessaging: z.boolean().optional(),
         }).optional(),
       }),
-      responseSchema: createResponseValidator(
-        z.object({
-          theme: z.enum(['light', 'dark', 'system']),
-          language: z.string(),
-          timezone: z.string(),
-          notifications: z.object({
-            email: z.boolean(),
-            push: z.boolean(),
-            sms: z.boolean(),
-            marketing: z.boolean(),
-          }),
-          privacy: z.object({
-            profileVisible: z.boolean(),
-            showEmail: z.boolean(),
-            allowMessaging: z.boolean(),
-          }),
-        })
-      ),
+      responseSchema: userPreferencesSchema,
     },
   },
 };
@@ -325,8 +329,8 @@ export class RequestBuilder<TRequest = unknown, TResponse = unknown> {
     private readonly endpoint: {
       method: string;
       path: string;
-      requestSchema?: z.ZodSchema<TRequest>;
-      responseSchema?: z.ZodSchema<TResponse>;
+      requestSchema?: z.ZodType<TRequest>;
+      responseSchema?: z.ZodType<TResponse>;
       config?: Partial<ApiRequestConfig>;
     }
   ) {}
@@ -344,7 +348,7 @@ export class RequestBuilder<TRequest = unknown, TResponse = unknown> {
         this.endpoint.requestSchema.parse(data);
       } catch (error) {
         if (error instanceof z.ZodError) {
-          throw new Error(`Request validation failed: ${error.errors.map(e => e.message).join(', ')}`);
+          throw new Error(`Request validation failed: ${error.errors.map((e: z.ZodIssue) => e.message).join(', ')}`);
         }
         throw error;
       }
@@ -389,7 +393,7 @@ export class RequestBuilder<TRequest = unknown, TResponse = unknown> {
         } as ApiResponse<TResponse>;
       } catch (error) {
         if (error instanceof z.ZodError) {
-          throw new Error(`Response validation failed: ${error.errors.map(e => e.message).join(', ')}`);
+          throw new Error(`Response validation failed: ${error.errors.map((e: z.ZodIssue) => e.message).join(', ')}`);
         }
         throw error;
       }
@@ -426,10 +430,7 @@ export class ApiService {
    */
   createAuthRequest<K extends keyof ApiEndpoints['auth']>(
     endpoint: K
-  ): RequestBuilder<
-    Parameters<ApiEndpoints['auth'][K]['requestSchema']['parse']>[0],
-    ReturnType<ApiEndpoints['auth'][K]['responseSchema']['parse']>
-  > {
+  ): RequestBuilder<any, any> {
     return new RequestBuilder(this.client, apiEndpoints.auth[endpoint]);
   }
 
@@ -438,10 +439,7 @@ export class ApiService {
    */
   createUserRequest<K extends keyof ApiEndpoints['user']>(
     endpoint: K
-  ): RequestBuilder<
-    Parameters<ApiEndpoints['user'][K]['requestSchema']['parse']>[0],
-    ReturnType<ApiEndpoints['user'][K]['responseSchema']['parse']>
-  > {
+  ): RequestBuilder<any, any> {
     return new RequestBuilder(this.client, apiEndpoints.user[endpoint]);
   }
 
@@ -587,6 +585,13 @@ export class ApiService {
   getConfig(): Readonly<ApiClientConfig> {
     return this.client.getConfig();
   }
+
+  /**
+   * Add global middleware
+   */
+  addMiddleware(middleware: MiddlewareFunction): void {
+    this.client.addMiddleware(middleware);
+  }
 }
 
 // =============================================================================
@@ -689,13 +694,7 @@ export type {
   PaginatedResponse,
   
   // Service types
-  ApiService as ApiServiceType,
-  AuthService as AuthServiceType,
-  UserService as UserServiceType,
-  NotificationService as NotificationServiceType,
-  PreferencesService as PreferencesServiceType,
-  PermissionsService as PermissionsServiceType,
-  CacheService as CacheServiceType,
+  // Note: Service type interfaces are not exported from ./types
   
   // Endpoint types
   ApiEndpoints,
@@ -732,9 +731,7 @@ export type {
   PermissionAuditLog,
   
   // Cache types
-  CacheEntry,
-  CacheStats,
-  CacheServiceConfig,
+  // Note: Cache type interfaces are exported from cache service directly
 } from './types';
 
 // Re-export error handling
@@ -749,6 +746,9 @@ export {
   permissionsService, 
   cacheService 
 };
+
+// Re-export authApi alias for backward compatibility
+export { authApi } from './auth.service';
 
 // Re-export utilities
 export {

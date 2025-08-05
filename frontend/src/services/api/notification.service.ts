@@ -26,6 +26,8 @@ import type {
   BatchNotificationRequest,
   BatchOperationResult,
   NotificationEvent,
+} from './types';
+import {
   NotificationType,
   NotificationPriority,
   NotificationChannel,
@@ -80,7 +82,7 @@ const subscriptionPreferencesSchema = z.object({
         timezone: z.string(),
       }).optional(),
     })
-  ).partial(),
+  ).optional(),
   globalSettings: z.object({
     enabled: z.boolean(),
     allowMarketing: z.boolean(),

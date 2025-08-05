@@ -16,7 +16,7 @@ redis==4.5.5
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 cryptography==41.0.7
-bcrypt==4.1.1
+bcrypt==4.0.1
 
 # Data validation and settings
 pydantic==2.5.0

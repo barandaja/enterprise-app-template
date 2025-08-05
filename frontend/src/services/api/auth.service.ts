@@ -863,6 +863,9 @@ export class AuthService {
 // Export singleton instance
 export const authService = new AuthService();
 
+// Export alias for backward compatibility
+export const authApi = authService;
+
 // Export validation schemas for external use
 export {
   loginCredentialsSchema,

@@ -11,6 +11,8 @@ import structlog
 
 from ..interfaces.event_interface import IEvent, IEventBus
 
+logger = structlog.get_logger()
+
 # Import from shared events module
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
@@ -33,8 +35,6 @@ except ImportError:
     def create_service_token(service_name, roles):
         # Return a mock token
         return f"mock_token_{service_name}"
-
-logger = structlog.get_logger()
 
 
 class DomainEventAdapter(DomainEvent):

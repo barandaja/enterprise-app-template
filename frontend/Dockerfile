@@ -13,9 +13,9 @@ FROM node:20-alpine as development
 
 WORKDIR /app
 
-# Install all dependencies including dev dependencies
+# Install all dependencies including dev dependencies and peer dependencies
 COPY package*.json ./
-RUN npm install && npm cache clean --force
+RUN npm install --include=optional && npm cache clean --force
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \

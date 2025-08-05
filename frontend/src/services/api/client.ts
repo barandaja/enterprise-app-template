@@ -18,12 +18,11 @@ import axios, {
   type AxiosError,
   type InternalAxiosRequestConfig
 } from 'axios';
+import { ApiError, ApiErrorCode } from './types';
 import type {
   ApiResponse,
   ApiSuccessResponse,
   ApiErrorResponse,
-  ApiError,
-  ApiErrorCode,
   ApiRequestConfig,
   EnhancedApiRequestConfig,
   ApiClientConfig,

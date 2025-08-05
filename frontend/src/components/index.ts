@@ -125,6 +125,11 @@ export {
   type AgeVerificationProps
 } from './AgeVerification';
 
+export {
+  ProtectedRoute,
+  withAuthGuard
+} from './ProtectedRoute';
+
 // Usage examples and quick reference:
 /*
 // Import individual components

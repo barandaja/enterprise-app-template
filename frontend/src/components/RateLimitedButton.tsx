@@ -25,6 +25,7 @@ export function RateLimitedButton({
   showCountdown = true,
   customLimitedMessage,
   className,
+  type,
   ...props
 }: RateLimitedButtonProps) {
   const { checkLimit, isLimited, reset } = useRateLimit(rateLimitConfig);
@@ -50,11 +51,10 @@ export function RateLimitedButton({
 
   const handleClick = useCallback(
     async (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      
       const result = checkLimit();
       
       if (!result.allowed) {
+        e.preventDefault(); // Always prevent when rate limited
         if (result.retriesAfter) {
           setRetriesAfter(result.retriesAfter);
           setCountdown(result.retriesAfter);
@@ -63,12 +63,21 @@ export function RateLimitedButton({
         return;
       }
 
-      // Call original onClick handler
+      // Call original onClick handler if provided
       if (onClick) {
+        // If custom onClick is provided, call it and let it handle preventDefault if needed
         await onClick(e);
+      } else if (type === 'submit') {
+        // For submit buttons without custom onClick, trigger form submission
+        // Don't prevent default - let the browser handle form submission
+        const form = e.currentTarget.form;
+        if (form) {
+          // The form submission will happen naturally via the browser's default behavior
+          // since we're not calling preventDefault()
+        }
       }
     },
-    [checkLimit, onClick, onRateLimitExceeded]
+    [checkLimit, onClick, onRateLimitExceeded, type]
   );
 
   const isButtonDisabled = disabled || isLimited || retriesAfter > 0;
@@ -92,6 +101,7 @@ export function RateLimitedButton({
     <>
       <Button
         {...props}
+        type={type}
         onClick={handleClick}
         disabled={isButtonDisabled}
         className={cn(

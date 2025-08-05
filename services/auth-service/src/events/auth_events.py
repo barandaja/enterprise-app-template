@@ -4,7 +4,8 @@ These events decouple business logic from audit logging concerns.
 """
 
 from typing import Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from .base_event import BaseEvent
 
@@ -19,6 +20,9 @@ class UserAuthenticatedEvent(BaseEvent):
     user_agent: Optional[str] = None
     device_info: Optional[Dict[str, Any]] = None
     location_data: Optional[Dict[str, Any]] = None
+    
+    def __post_init__(self):
+        super().__init__()
 
 
 @dataclass
@@ -103,6 +107,9 @@ class EmailVerificationRequestedEvent(BaseEvent):
     email: str
     verification_token: str
     is_resend: bool = False
+    
+    def __post_init__(self):
+        super().__init__()
 
 
 @dataclass
@@ -111,6 +118,9 @@ class EmailVerifiedEvent(BaseEvent):
     
     user_id: int
     email: str
+    
+    def __post_init__(self):
+        super().__init__()
 
 
 @dataclass

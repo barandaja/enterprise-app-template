@@ -15,7 +15,7 @@ import {
   AlertCircle,
   Camera
 } from 'lucide-react';
-import { PageProps } from '../types';
+import type { PageProps } from '../types';
 import { SecureFileUpload } from '../components/SecureFileUpload';
 import { toast } from 'react-hot-toast';
 
@@ -24,13 +24,13 @@ const profileEditSchema = z.object({
   firstName: z.string().min(1, 'First name is required').max(50, 'First name must be less than 50 characters'),
   lastName: z.string().min(1, 'Last name is required').max(50, 'Last name must be less than 50 characters'),
   email: z.string().email('Invalid email address'),
-  phone: z.string().optional().refine((val) => !val || /^[+]?[(]?[0-9]{3}[)]?[-\s.]?[0-9]{3}[-\s.]?[0-9]{4,6}$/.test(val), {
+  phone: z.string().refine((val) => !val || /^[+]?[(]?[0-9]{3}[)]?[-\s.]?[0-9]{3}[-\s.]?[0-9]{4,6}$/.test(val), {
     message: 'Invalid phone number format',
-  }),
-  location: z.string().optional().max(100, 'Location must be less than 100 characters'),
-  bio: z.string().optional().max(500, 'Bio must be less than 500 characters'),
-  department: z.string().optional().max(50, 'Department must be less than 50 characters'),
-  position: z.string().optional().max(50, 'Position must be less than 50 characters'),
+  }).optional(),
+  location: z.string().max(100, 'Location must be less than 100 characters').optional(),
+  bio: z.string().max(500, 'Bio must be less than 500 characters').optional(),
+  department: z.string().max(50, 'Department must be less than 50 characters').optional(),
+  position: z.string().max(50, 'Position must be less than 50 characters').optional(),
 });
 
 type ProfileEditFormData = z.infer<typeof profileEditSchema>;

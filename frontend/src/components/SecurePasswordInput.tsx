@@ -112,37 +112,21 @@ export const SecurePasswordInput = forwardRef<HTMLInputElement, SecurePasswordIn
             value={value}
             onChange={onChange}
             error={error}
-            className={className}
             rightIcon={
-              <div className="flex items-center space-x-1">
-                {showGenerator && generatedPassword && (
-                  <button
-                    type="button"
-                    onClick={handleCopyPassword}
-                    className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-                    title="Copy password"
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </button>
+              <button
+                type="button"
+                onClick={handleToggleVisibility}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
                 )}
-                <button
-                  type="button"
-                  onClick={handleToggleVisibility}
-                  className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-                  title={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
+              </button>
             }
+            className={className}
             {...props}
           />
         </div>
@@ -159,11 +143,29 @@ export const SecurePasswordInput = forwardRef<HTMLInputElement, SecurePasswordIn
               <RefreshCw className="h-3 w-3 mr-1" />
               Generate Strong Password
             </Button>
-            {generatedPassword && passwordValue === generatedPassword && (
-              <span className="text-xs text-green-600">
-                Using generated password
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {generatedPassword && passwordValue === generatedPassword && (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCopyPassword}
+                    className="text-xs p-2"
+                    title="Copy password"
+                  >
+                    {copied ? (
+                      <Check className="h-3 w-3 text-green-500" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </Button>
+                  <span className="text-xs text-green-600">
+                    Using generated password
+                  </span>
+                </>
+              )}
+            </div>
           </div>
         )}
 

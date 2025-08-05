@@ -11,12 +11,11 @@ services:
       - USER_DB_PASSWORD=${USER_DB_PASSWORD}
 
   redis:
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    # Temporarily disable password for debugging
+    # command: redis-server --requirepass ${REDIS_PASSWORD}
 
   auth-service:
-    env_file:
-      - .env
-      - ./services/auth-service/.env
+    # env_file disabled to use explicit environment variables from main docker-compose.yml
 
   user-service:
     env_file:

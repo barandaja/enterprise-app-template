@@ -6,6 +6,7 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   helperText?: string;
   error?: string | boolean;
   leftIcon?: React.ReactNode;
+  rightIcon?: React.ReactNode;
   containerClassName?: string;
 }
 
@@ -18,6 +19,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     helperText,
     error,
     leftIcon,
+    rightIcon,
     id,
     ...props 
   }, ref) => {
@@ -42,7 +44,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         
         <div className="relative">
           {leftIcon && (
-            <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none">
+            <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none z-10">
               {leftIcon}
             </div>
           )}
@@ -53,6 +55,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             className={cn(
               'input',
               leftIcon && 'pl-10',
+              rightIcon && 'pr-10',
               hasError && 'border-destructive focus-visible:ring-destructive',
               className
             )}
@@ -65,6 +68,12 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             }
             {...props}
           />
+          
+          {rightIcon && (
+            <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none">
+              {rightIcon}
+            </div>
+          )}
         </div>
 
         {(helperText || errorMessage) && (

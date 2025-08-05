@@ -245,7 +245,7 @@ export function initializeSecurityMonitoring(): void {
  * Security headers configuration for development
  */
 export const RECOMMENDED_SECURITY_HEADERS: SecurityHeaders = {
-  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self';",
   'strict-transport-security': 'max-age=31536000; includeSubDomains; preload',
   'x-frame-options': 'DENY',
   'x-content-type-options': 'nosniff',

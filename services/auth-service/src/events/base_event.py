@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 from ..interfaces.event_interface import IEvent
 
 
-@dataclass
 class BaseEvent(IEvent):
     """Base implementation for all events."""
     
-    correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    def __init__(self):
+        self.correlation_id = str(uuid.uuid4())
+        self.timestamp = datetime.utcnow()
     
     @property
     def event_type(self) -> str:

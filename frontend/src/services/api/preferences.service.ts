@@ -14,13 +14,12 @@
 
 import { z } from 'zod';
 import { apiClient } from './client';
+import { PreferenceDataType } from './types';
 import type {
   ApiResponse,
-  ApiRequestConfig,
   PaginatedResponse,
   EnhancedApiRequestConfig,
   PreferenceValue,
-  PreferenceDataType,
   PreferenceDefinition,
   UserPreferenceEntry,
   PreferenceGroup,

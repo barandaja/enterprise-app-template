@@ -128,7 +128,7 @@ export const checkA11y = async (container: Element) => {
 }
 
 // Mock API responses
-export const createMockApiResponse = <T>(data: T, success = true) => ({
+export const createMockApiResponse = <T,>(data: T, success = true) => ({
   success,
   data,
   message: success ? 'Success' : 'Error',

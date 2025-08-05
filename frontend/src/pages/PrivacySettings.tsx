@@ -9,7 +9,7 @@ import { Link } from 'react-router-dom';
 import { ConsentSettings, DataPrivacySettings } from '../components';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
-import { PageProps } from '../types';
+import type { PageProps } from '../types';
 
 function PrivacySettings({ className }: PageProps) {
   return (

@@ -11,7 +11,6 @@ import {
   X,
   MoreHorizontal,
   Trash2,
-  MarkAsRead,
 } from 'lucide-react';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { cn } from '../utils';

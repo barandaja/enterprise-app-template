@@ -441,6 +441,20 @@ export function useSecureForm<T extends z.ZodType>(
 }
 
 /**
+ * Convenience function for input sanitization (alias for InputSanitizer.sanitizeText)
+ */
+export function sanitizeInput(input: string): string {
+  return InputSanitizer.sanitizeText(input);
+}
+
+/**
+ * Convenience function for email validation (alias for InputValidator.validateEmail)
+ */
+export function validateEmail(email: string): { valid: boolean; error?: string } {
+  return InputValidator.validateEmail(email);
+}
+
+/**
  * Security headers validator
  */
 export function validateSecurityHeaders(headers: Headers): {

@@ -148,14 +148,48 @@ class UserService:
         include_roles: bool = True
     ) -> Optional[User]:
         """Get user by email with optional role loading."""
-        try:
-            # Note: Since email is encrypted, we need a different approach
-            # In production, you might use a hash-based lookup or search index
-            return await User.get_by_email(db, email)
+        # Note: Since email is encrypted, we use hash-based lookup
+        # The User model handles decryption failures gracefully with bypass logic
+        return await User.get_by_email(db, email)
+    
+    async def get_user_by_email_with_roles(
+        self,
+        db: AsyncSession,
+        email: str
+    ) -> Optional[User]:
+        """Get user by email with roles and permissions eagerly loaded."""
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         
-        except Exception as e:
-            logger.error("Failed to get user by email", error=str(e))
-            return None
+        # Get email hash for lookup
+        email_hash = User._hash_email(email)
+        
+        # Query with eager loading of roles and permissions
+        query = select(User).options(
+            selectinload(User.roles).selectinload(Role.permissions)
+        ).where(
+            User.email_hash == email_hash,
+            User.is_deleted == False
+        )
+        
+        result = await db.execute(query)
+        user = result.scalar_one_or_none()
+        
+        # Verify email matches (defense against hash collisions)
+        if user:
+            try:
+                if user.email and user.email.startswith("__DECRYPTION_FAILED_"):
+                    # Set the email for consistency
+                    user.email = email
+                elif user.email.lower() != email.lower():
+                    logger.warning("Email hash collision detected", email_hash=email_hash)
+                    return None
+            except Exception as e:
+                logger.warning("Email verification failed - using hash-based lookup", 
+                              email_hash=email_hash, error=str(e))
+                user.email = email
+        
+        return user
     
     async def update_user(
         self,

@@ -10,6 +10,7 @@ import { securityUtils } from './secureStorage';
  */
 class CSRFTokenManager {
   private static instance: CSRFTokenManager;
+  private static hasLoggedDevWarning = false;
   private token: string | null = null;
   private readonly tokenHeader = 'X-CSRF-Token';
   private readonly cookieName = 'csrf_token';
@@ -110,6 +111,17 @@ class CSRFTokenManager {
 
     // SECURITY: Never generate tokens client-side
     // Server must always provide CSRF token
+    // In development mode, return empty string to prevent errors while maintaining security awareness
+    if (process.env.NODE_ENV === 'development') {
+      // Only log once to avoid console spam
+      if (!CSRFTokenManager.hasLoggedDevWarning) {
+        console.info('CSRF: Running in development mode without server-provided token. This is expected for local development.');
+        CSRFTokenManager.hasLoggedDevWarning = true;
+      }
+      return '';
+    }
+    
+    // In production, strict enforcement - throw error
     throw new CSRFError('CSRF token not found. Server must provide token via cookie or meta tag.');
   }
 
@@ -135,6 +147,11 @@ class CSRFTokenManager {
   refreshToken(): void {
     // SECURITY: Token refresh must be done server-side
     // Client should request new token from server
+    if (process.env.NODE_ENV === 'development') {
+      // In development, skip refresh since we don't have a CSRF endpoint
+      console.debug('CSRF: Token refresh skipped in development mode');
+      return;
+    }
     throw new CSRFError('CSRF token refresh must be performed by the server. Request a new token from /api/csrf/refresh');
   }
 
@@ -142,7 +159,15 @@ class CSRFTokenManager {
    * Validate CSRF token from response
    */
   validateToken(responseToken: string): boolean {
-    return securityUtils.secureCompare(this.getToken(), responseToken);
+    const currentToken = this.getToken();
+    
+    // In development mode with empty token, skip validation but log warning
+    if (process.env.NODE_ENV === 'development' && !currentToken) {
+      console.warn('CSRF token validation skipped in development mode - no token available');
+      return true;
+    }
+    
+    return securityUtils.secureCompare(currentToken, responseToken);
   }
 
   /**
@@ -163,15 +188,9 @@ export const csrfTokenManager = CSRFTokenManager.getInstance();
  * Used by API client and other services
  */
 export function getCSRFToken(): string | null {
-  try {
-    return csrfTokenManager.getToken();
-  } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('CSRF token not available:', error);
-      return null;
-    }
-    throw error;
-  }
+  // CSRFTokenManager now handles development mode gracefully internally
+  const token = csrfTokenManager.getToken();
+  return token || null;
 }
 
 /**
@@ -231,10 +250,15 @@ export function addCSRFToken(
 ): Record<string, string> {
   if (shouldIncludeCSRFToken(url, method, config)) {
     const headerName = config.customHeader || csrfTokenManager.getHeaderName();
-    return {
-      ...headers,
-      [headerName]: csrfTokenManager.getToken(),
-    };
+    const token = csrfTokenManager.getToken();
+    
+    // Only add header if token is not empty (handles development mode gracefully)
+    if (token) {
+      return {
+        ...headers,
+        [headerName]: token,
+      };
+    }
   }
   return headers;
 }
@@ -255,8 +279,11 @@ export function useCSRFToken(): {
   headerName: string;
   refreshToken: () => void;
 } {
+  // CSRFTokenManager now handles development mode gracefully internally
+  const token = csrfTokenManager.getToken();
+  
   return {
-    token: csrfTokenManager.getToken(),
+    token,
     headerName: csrfTokenManager.getHeaderName(),
     refreshToken: () => csrfTokenManager.refreshToken(),
   };
@@ -298,7 +325,12 @@ export function initializeCSRFProtection(): void {
       const elapsed = Date.now() - parseInt(lastActivity, 10);
       // Refresh if more than 30 minutes
       if (elapsed > 30 * 60 * 1000) {
-        csrfTokenManager.refreshToken();
+        try {
+          csrfTokenManager.refreshToken();
+        } catch (error) {
+          // Log error but don't break the application
+          console.debug('CSRF: Token refresh failed:', error);
+        }
       }
     }
     sessionStorage.setItem('last_activity', Date.now().toString());

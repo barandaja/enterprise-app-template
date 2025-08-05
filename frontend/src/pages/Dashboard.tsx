@@ -10,7 +10,7 @@ import {
   Calendar,
   Clock
 } from 'lucide-react';
-import { PageProps } from '../types';
+import type { PageProps } from '../types';
 
 interface StatCardProps {
   title: string;

@@ -7,7 +7,7 @@ import {
   LogOut,
   ChevronDown,
   UserCircle,
-  Privacy,
+  Lock,
   HelpCircle,
 } from 'lucide-react';
 import { useAuthActions } from '../stores/authStore';
@@ -172,7 +172,7 @@ export function UserMenu({ user, className }: UserMenuProps) {
               role="menuitem"
               data-testid="privacy-settings-menu-item"
             >
-              <Privacy className="h-4 w-4 mr-3" />
+              <Lock className="h-4 w-4 mr-3" />
               Privacy Settings
             </Link>
 

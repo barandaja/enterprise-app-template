@@ -161,7 +161,16 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         <div className="relative">
           {/* Left Element/Icon */}
           {(leftIcon || leftElement) && (
-            <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+            <div className={cn(
+              "absolute inset-y-0 left-0 flex items-center pointer-events-none",
+              {
+                'xs': 'pl-2',
+                'sm': 'pl-2.5',
+                'md': 'pl-3',
+                'lg': 'pl-3.5',
+                'xl': 'pl-4'
+              }[size]
+            )}>
               {leftElement || (
                 <span 
                   className={cn(
@@ -187,9 +196,21 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
               inputVariants[variant],
               // Size styles
               inputSizes[size],
-              // Padding adjustments for icons/elements
-              (leftIcon || leftElement) && 'pl-10',
-              (rightIcon || rightElement || showClearButton || loading) && 'pr-10',
+              // Padding adjustments for icons/elements based on size
+              (leftIcon || leftElement) && {
+                'xs': 'pl-8',
+                'sm': 'pl-9', 
+                'md': 'pl-10',
+                'lg': 'pl-11',
+                'xl': 'pl-12'
+              }[size],
+              (rightIcon || rightElement || showClearButton || loading) && {
+                'xs': 'pr-8',
+                'sm': 'pr-9',
+                'md': 'pr-10', 
+                'lg': 'pr-11',
+                'xl': 'pr-12'
+              }[size],
               // Error styles
               hasError && variant !== 'unstyled' && 'border-red-500 focus:border-red-500 focus:ring-red-500 dark:border-red-400',
               // Disabled styles
@@ -209,7 +230,16 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
 
           {/* Right Element/Icon/Clear/Loading */}
           {(rightIcon || rightElement || showClearButton || loading) && (
-            <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+            <div className={cn(
+              "absolute inset-y-0 right-0 flex items-center",
+              {
+                'xs': 'pr-2',
+                'sm': 'pr-2.5',
+                'md': 'pr-3',
+                'lg': 'pr-3.5',
+                'xl': 'pr-4'
+              }[size]
+            )}>
               {loading && <LoadingSpinner size={iconSizes[size]} />}
               {!loading && showClearButton && (
                 <ClearButton onClear={onClear} size={size} />

@@ -16,7 +16,7 @@ export interface CSPConfig {
   mediaSrc?: string[];
   objectSrc?: string[];
   frameSrc?: string[];
-  frameAncestors?: string[];
+  // frameAncestors removed - cannot be set via meta tag, only HTTP headers
   formAction?: string[];
   baseUri?: string[];
   reportUri?: string;
@@ -45,7 +45,7 @@ export function generateCSP(config: CSPConfig): string {
   formatDirective('media-src', config.mediaSrc);
   formatDirective('object-src', config.objectSrc || ["'none'"]);
   formatDirective('frame-src', config.frameSrc);
-  formatDirective('frame-ancestors', config.frameAncestors || ["'none'"]);
+  // formatDirective('frame-ancestors', config.frameAncestors || ["'none'"]); // Cannot be set via meta tag
   formatDirective('form-action', config.formAction || ["'self'"]);
   formatDirective('base-uri', config.baseUri || ["'self'"]);
 
@@ -82,7 +82,27 @@ function getApiUrlForCSP(): string {
 }
 
 /**
+ * Development CSP configuration (more permissive for Vite HMR)
+ * Note: frame-ancestors cannot be set via meta tag, only HTTP headers
+ */
+export const developmentCSPConfig: CSPConfig = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'http://localhost:*', 'ws://localhost:*'],
+  styleSrc: ["'self'", "'unsafe-inline'"],
+  imgSrc: ["'self'", 'data:', 'https:', 'http:'],
+  fontSrc: ["'self'", 'data:'],
+  connectSrc: ["'self'", 'http://localhost:*', 'ws://localhost:*', getApiUrlForCSP()],
+  mediaSrc: ["'none'"],
+  objectSrc: ["'none'"],
+  // frameAncestors removed - cannot be used in meta tags
+  formAction: ["'self'"],
+  baseUri: ["'self'"],
+  upgradeInsecureRequests: false, // Disable for localhost development
+};
+
+/**
  * Default CSP configuration for production
+ * Note: frame-ancestors cannot be set via meta tag, only HTTP headers
  */
 export const defaultCSPConfig: CSPConfig = {
   defaultSrc: ["'self'"],
@@ -93,7 +113,7 @@ export const defaultCSPConfig: CSPConfig = {
   connectSrc: ["'self'", getApiUrlForCSP()],
   mediaSrc: ["'none'"],
   objectSrc: ["'none'"],
-  frameAncestors: ["'none'"],
+  // frameAncestors removed - cannot be used in meta tags  
   formAction: ["'self'"],
   baseUri: ["'self'"],
   upgradeInsecureRequests: true,
@@ -111,7 +131,7 @@ export const strictCSPConfig: CSPConfig = {
   connectSrc: ["'self'"],
   mediaSrc: ["'none'"],
   objectSrc: ["'none'"],
-  frameAncestors: ["'none'"],
+  // frameAncestors: ["'none'"], // Cannot be set via meta tag
   formAction: ["'self'"],
   baseUri: ["'self'"],
   upgradeInsecureRequests: true,
@@ -134,6 +154,16 @@ export interface SecurityHeaders {
 }
 
 /**
+ * Get appropriate CSP config based on environment
+ */
+function getCSPConfigForEnvironment(): CSPConfig {
+  // Check if we're in development mode using Vite's environment
+  const isDevelopment = import.meta.env?.DEV === true;
+  
+  return isDevelopment ? developmentCSPConfig : defaultCSPConfig;
+}
+
+/**
  * Get recommended security headers
  */
 export function getSecurityHeaders(options: {
@@ -145,7 +175,7 @@ export function getSecurityHeaders(options: {
   referrerPolicy?: string;
 } = {}): SecurityHeaders {
   const {
-    cspConfig = defaultCSPConfig,
+    cspConfig = getCSPConfigForEnvironment(),
     enableHSTS = true,
     hstsMaxAge = 31536000, // 1 year
     enableFrameOptions = true,
@@ -181,16 +211,16 @@ export function getSecurityHeaders(options: {
 export function addSecurityMetaTags(): void {
   const head = document.head;
 
-  // CSP meta tag
+  // CSP meta tag with environment-appropriate config
   const cspMeta = document.createElement('meta');
   cspMeta.httpEquiv = 'Content-Security-Policy';
-  cspMeta.content = generateCSP(defaultCSPConfig);
+  cspMeta.content = generateCSP(getCSPConfigForEnvironment());
   head.appendChild(cspMeta);
 
   // Other security-related meta tags
+  // Note: X-Frame-Options cannot be set via meta tag, only HTTP headers
   const metaTags = [
     { httpEquiv: 'X-Content-Type-Options', content: 'nosniff' },
-    { httpEquiv: 'X-Frame-Options', content: 'DENY' },
     { httpEquiv: 'X-XSS-Protection', content: '1; mode=block' },
     { name: 'referrer', content: 'strict-origin-when-cross-origin' },
   ];
@@ -213,8 +243,12 @@ export function addSecurityMetaTags(): void {
 export const securityHeadersPlugin = () => ({
   name: 'security-headers',
   configureServer(server: any) {
-    server.middlewares.use((req: any, res: any, next: any) => {
-      const headers = getSecurityHeaders();
+    server.middlewares.use((_req: any, res: any, next: any) => {
+      // Force development configuration for dev server
+      const headers = getSecurityHeaders({
+        cspConfig: developmentCSPConfig,
+        enableHSTS: false, // Disable HSTS in development
+      });
       
       Object.entries(headers).forEach(([key, value]) => {
         if (value) {
@@ -225,12 +259,17 @@ export const securityHeadersPlugin = () => ({
       next();
     });
   },
-  transformIndexHtml(html: string) {
-    // Add security meta tags to HTML
+  transformIndexHtml(html: string, context: any) {
+    // Add security meta tags to HTML with environment-appropriate CSP
+    // Note: X-Frame-Options cannot be set via meta tag, only HTTP headers
+    
+    // Use development config if this is a dev server
+    const isDev = context?.server !== undefined;
+    const cspConfig = isDev ? developmentCSPConfig : getCSPConfigForEnvironment();
+    
     const securityMeta = `
-    <meta http-equiv="Content-Security-Policy" content="${generateCSP(defaultCSPConfig)}">
+    <meta http-equiv="Content-Security-Policy" content="${generateCSP(cspConfig)}">
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
-    <meta http-equiv="X-Frame-Options" content="DENY">
     <meta http-equiv="X-XSS-Protection" content="1; mode=block">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     `.trim();

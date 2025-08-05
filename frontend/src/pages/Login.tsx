@@ -14,7 +14,7 @@ import {
 import { CSRFToken } from '../components/CSRFToken';
 import { useAuthStore, useAuthActions, useAuthError, useAuthLoading } from '../stores/authStore';
 import { validateEmail } from '../security/inputValidation';
-import { PageProps } from '../types';
+import type { PageProps } from '../types';
 import { toast } from 'react-hot-toast';
 
 // Form validation schema
@@ -104,7 +104,7 @@ function Login({ className }: PageProps) {
       toast.success('Welcome back!');
       
       // Navigate to intended destination or dashboard
-      navigate(from, { replace: true });
+      navigate(from === '/' ? '/dashboard' : from, { replace: true });
     } catch (error) {
       console.error('Login error:', error);
       setLoginError(authError || 'Invalid email or password. Please try again.');
@@ -151,7 +151,6 @@ function Login({ className }: PageProps) {
           type="email"
           autoComplete="email"
           placeholder="Enter your email"
-          leftIcon={<Mail className="h-4 w-4" />}
           error={errors.email?.message}
           data-testid="email-input"
           {...register('email')}
@@ -163,15 +162,12 @@ function Login({ className }: PageProps) {
             Password
           </label>
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Lock className="h-4 w-4 text-muted-foreground" />
-            </div>
             <input
               id="password"
               type={showPassword ? 'text' : 'password'}
               autoComplete="current-password"
               placeholder="Enter your password"
-              className={`input pl-10 pr-10 ${errors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+              className={`input pr-10 ${errors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
               data-testid="password-input"
               {...register('password')}
             />

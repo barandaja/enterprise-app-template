@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { useShallow } from 'zustand/react/shallow';
 import { authService } from '../services/api/auth.service';
 import { userService } from '../services/api/user.service';
 import { ApiError, createUserFriendlyError } from '../services/api';
@@ -107,7 +108,7 @@ interface AuthActions extends StoreEventEmitter {
   readonly reportSecurityEvent: (event: SecurityEvent) => void;
   
   // State management with async patterns
-  readonly clearErrors: () => void;
+  readonly clearError: () => void;
   readonly initialize: () => Promise<void>;
   readonly reset: () => void;
   
@@ -726,12 +727,18 @@ export const useAuthLoading = () => useAuthStore((state) => state.isLoading);
 export const useAuthError = () => useAuthStore((state) => state.error);
 export const useAuthInitializing = () => useAuthStore((state) => state.isInitializing);
 
-// Auth actions selectors
-export const useAuthActions = () => useAuthStore((state) => ({
+// Auth actions selectors with memoization to prevent infinite re-renders
+export const useAuthActions = () => useAuthStore(useShallow((state) => ({
   login: state.login,
   register: state.register,
   logout: state.logout,
   updateProfile: state.updateProfile,
   clearError: state.clearError,
   refreshAccessToken: state.refreshAccessToken,
-}));
+})));
+
+/**
+ * Type for the auth actions selector return value
+ * This ensures type safety when destructuring the actions
+ */
+export type AuthActionsType = ReturnType<typeof useAuthActions>;

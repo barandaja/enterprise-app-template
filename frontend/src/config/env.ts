@@ -1,6 +1,9 @@
 /**
  * Environment configuration with validation
  * Ensures all required environment variables are present and valid
+ * 
+ * Recommended variables have sensible defaults but should be explicitly set
+ * in .env.local for development and production environments.
  */
 
 // Define required environment variables
@@ -96,12 +99,11 @@ export function validateEnvironment(): void {
     errors.push('Production API URL must be configured (currently using placeholder)');
   }
 
-  // Check recommended variables
-  recommendedEnvVars.forEach(varName => {
-    if (!import.meta.env[varName] && import.meta.env.DEV) {
-      console.warn(`Recommended environment variable ${varName} is not set, using default value`);
-    }
-  });
+  // Check recommended variables (only warn in development if no default is available)
+  const missingRecommended = recommendedEnvVars.filter(varName => !import.meta.env[varName]);
+  if (missingRecommended.length > 0 && import.meta.env.DEV) {
+    console.warn(`The following recommended environment variables are not set (using defaults):`, missingRecommended);
+  }
 
   // Throw if any errors in production
   if (errors.length > 0 && import.meta.env.PROD) {

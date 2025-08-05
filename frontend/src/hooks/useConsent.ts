@@ -4,12 +4,15 @@
  */
 
 import { useEffect, useCallback } from 'react';
-import { useConsentStore, useConsent as useConsentCategory } from '../stores/consentStore';
+import { useConsentStore } from '../stores/consentStore';
 
 /**
  * Hook to check if a specific consent category is granted
  */
-export { useConsent as useConsentCategory } from '../stores/consentStore';
+export function useConsent(category: 'necessary' | 'analytics' | 'marketing' | 'preferences') {
+  const consentStore = useConsentStore();
+  return consentStore.preferences?.[category] ?? (category === 'necessary');
+}
 
 /**
  * Hook to conditionally load scripts based on consent
@@ -18,7 +21,8 @@ export function useConsentScript(
   category: 'analytics' | 'marketing' | 'preferences',
   scriptLoader: () => void | Promise<void>
 ) {
-  const hasConsent = useConsentCategory(category);
+  const consentStore = useConsentStore();
+  const hasConsent = consentStore.preferences?.[category] || false;
 
   useEffect(() => {
     if (hasConsent) {
@@ -46,7 +50,8 @@ export function useConsentScript(
  * Hook to track analytics events with consent
  */
 export function useAnalytics() {
-  const hasConsent = useConsentCategory('analytics');
+  const consentStore = useConsentStore();
+  const hasConsent = consentStore.preferences?.analytics || false;
 
   const trackEvent = useCallback(
     (eventName: string, properties?: Record<string, any>) => {
@@ -93,7 +98,8 @@ export function useAnalytics() {
  * Hook for managing marketing/advertising scripts
  */
 export function useMarketing() {
-  const hasConsent = useConsentCategory('marketing');
+  const consentStore = useConsentStore();
+  const hasConsent = consentStore.preferences?.marketing || false;
 
   const loadMarketingScript = useCallback(
     (scriptUrl: string, onLoad?: () => void) => {
@@ -132,7 +138,8 @@ export function usePreferences<T extends Record<string, any>>(
   key: string,
   defaultValue: T
 ): [T, (newValue: T) => void] {
-  const hasConsent = useConsentCategory('preferences');
+  const consentStore = useConsentStore();
+  const hasConsent = consentStore.preferences?.preferences || false;
   
   const getPreferences = useCallback((): T => {
     if (!hasConsent) {

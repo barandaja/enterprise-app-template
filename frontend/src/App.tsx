@@ -2,9 +2,10 @@ import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useAuthStore } from './stores/authStore';
-import { ErrorBoundary, RouteAsyncBoundary, ConsentBanner, AgeVerification } from './components';
+import { ErrorBoundary, RouteAsyncBoundary, ConsentBanner, ProtectedRoute } from './components';
 import { initializeSecurityMonitoring } from './security/headers';
 import { initializeCSP } from './security/csp';
+import { useAuth } from './hooks/useAuth';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -20,6 +21,7 @@ import EmailVerification from './pages/EmailVerification';
 import Profile from './pages/Profile';
 import ProfileEdit from './pages/ProfileEdit';
 import PrivacySettings from './pages/PrivacySettings';
+import Unauthorized from './pages/Unauthorized';
 
 // 404 Page Component
 function NotFound() {
@@ -39,6 +41,24 @@ function NotFound() {
   );
 }
 
+// Auth redirect component for root route
+function AuthRedirect() {
+  const { isAuthenticated, isInitializing } = useAuth();
+  
+  if (isInitializing) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  return <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />;
+}
+
 function App() {
   // Initialize auth store and security monitoring on app mount
   useEffect(() => {
@@ -47,15 +67,6 @@ function App() {
     initializeCSP();
   }, []);
 
-  const handleAgeVerified = (age: number, birthDate: Date) => {
-    console.log(`User verified: age ${age}, birthdate ${birthDate.toISOString()}`);
-    // Store age verification data if needed
-  };
-
-  const handleAgeFailed = () => {
-    console.log('Age verification failed');
-    // Handle users who are too young
-  };
 
   return (
     <ErrorBoundary 
@@ -94,6 +105,9 @@ function App() {
         />
 
         <Routes>
+          {/* Root route - redirect based on authentication */}
+          <Route path="/" element={<AuthRedirect />} />
+
           {/* Authentication routes with AuthLayout */}
           <Route path="/login" element={
             <AuthLayout 
@@ -137,34 +151,45 @@ function App() {
           } />
 
           {/* Protected routes with MainLayout */}
-          <Route path="/" element={
-            <RouteAsyncBoundary>
-              <MainLayout>
-                <Dashboard />
-              </MainLayout>
-            </RouteAsyncBoundary>
+          <Route path="/dashboard" element={
+            <ProtectedRoute>
+              <RouteAsyncBoundary>
+                <MainLayout>
+                  <Dashboard />
+                </MainLayout>
+              </RouteAsyncBoundary>
+            </ProtectedRoute>
           } />
           <Route path="/profile" element={
-            <RouteAsyncBoundary>
-              <MainLayout>
-                <Profile />
-              </MainLayout>
-            </RouteAsyncBoundary>
+            <ProtectedRoute>
+              <RouteAsyncBoundary>
+                <MainLayout>
+                  <Profile />
+                </MainLayout>
+              </RouteAsyncBoundary>
+            </ProtectedRoute>
           } />
           <Route path="/profile/edit" element={
-            <RouteAsyncBoundary>
-              <MainLayout>
-                <ProfileEdit />
-              </MainLayout>
-            </RouteAsyncBoundary>
+            <ProtectedRoute>
+              <RouteAsyncBoundary>
+                <MainLayout>
+                  <ProfileEdit />
+                </MainLayout>
+              </RouteAsyncBoundary>
+            </ProtectedRoute>
           } />
           <Route path="/privacy" element={
-            <RouteAsyncBoundary>
-              <MainLayout>
-                <PrivacySettings />
-              </MainLayout>
-            </RouteAsyncBoundary>
+            <ProtectedRoute>
+              <RouteAsyncBoundary>
+                <MainLayout>
+                  <PrivacySettings />
+                </MainLayout>
+              </RouteAsyncBoundary>
+            </ProtectedRoute>
           } />
+
+          {/* Access control routes */}
+          <Route path="/unauthorized" element={<Unauthorized />} />
 
           {/* 404 route */}
           <Route path="/404" element={<NotFound />} />
@@ -175,14 +200,6 @@ function App() {
         
         {/* Global Components */}
         <ConsentBanner />
-        <AgeVerification 
-          minAge={16}
-          onVerified={handleAgeVerified}
-          onFailed={handleAgeFailed}
-          showParentalConsent={true}
-          privacyPolicyUrl="/privacy"
-          termsUrl="/terms"
-        />
       </div>
     </Router>
     </ErrorBoundary>

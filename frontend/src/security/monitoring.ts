@@ -118,17 +118,41 @@ export class SecurityMonitor {
   private isInitialized = false;
 
   constructor(config: SecurityMonitoringConfig = {}) {
+    // In development, be very conservative about enabling remote monitoring
+    const isDevelopment = import.meta.env.DEV;
+    const hasExplicitBackendUrl = import.meta.env.VITE_API_URL && 
+      import.meta.env.VITE_API_URL !== 'http://localhost:5173' &&
+      !import.meta.env.VITE_API_URL.includes('localhost:5173');
+    
+    // Default to disabled in development unless explicitly enabled
+    const shouldEnableInDev = config.enabled === true || hasExplicitBackendUrl;
+    
     this.config = {
-      enabled: config.enabled ?? true,
-      endpoint: config.endpoint ?? '/api/security/events',
+      enabled: config.enabled ?? (isDevelopment ? shouldEnableInDev : true),
+      endpoint: config.endpoint ?? (
+        hasExplicitBackendUrl 
+          ? `${import.meta.env.VITE_API_URL}/security/events`
+          : '/api/security/events'
+      ),
       batchSize: config.batchSize ?? 10,
       batchInterval: config.batchInterval ?? 5000,
-      enableConsoleLogging: config.enableConsoleLogging ?? process.env.NODE_ENV === 'development',
+      enableConsoleLogging: config.enableConsoleLogging ?? isDevelopment,
       customHandler: config.customHandler ?? null,
       monitoredEvents: config.monitoredEvents ?? Object.values(SecurityEventType)
     };
     
     this.sessionId = this.generateSessionId();
+    
+    // Debug logging for development
+    if (isDevelopment && this.config.enableConsoleLogging) {
+      console.log(`Security monitoring initialized:`, {
+        enabled: this.config.enabled,
+        endpoint: this.config.endpoint,
+        hasBackend: hasExplicitBackendUrl,
+        mode: 'development',
+        note: this.config.enabled ? 'Will attempt backend requests' : 'Local logging only'
+      });
+    }
   }
 
   /**
@@ -389,7 +413,13 @@ export class SecurityMonitor {
                   details: { key, valueLength: value.length }
                 });
               }
-              return target.setItem(key, value);
+              return target.setItem.call(target, key, value);
+            };
+          }
+          
+          if (prop === 'getItem') {
+            return function(key: string) {
+              return target.getItem.call(target, key);
             };
           }
           
@@ -404,12 +434,13 @@ export class SecurityMonitor {
                   details: { key }
                 });
               }
-              return target.removeItem(key);
+              return target.removeItem.call(target, key);
             };
           }
           
-          // Pass through other properties/methods
-          return Reflect.get(target, prop);
+          // Pass through other properties/methods with proper binding
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
         }
       });
     };
@@ -429,7 +460,7 @@ export class SecurityMonitor {
       });
     } catch (error) {
       // Some browsers may not allow redefining storage objects
-      this.log('Failed to set up storage monitoring', error);
+      console.warn('Failed to set up storage monitoring:', error);
     }
   }
 
@@ -582,26 +613,116 @@ export class SecurityMonitor {
   }
 
   /**
+   * Check if backend is actually available before sending requests
+   */
+  private async checkBackendAvailability(): Promise<boolean> {
+    if (!this.config.enabled) return false;
+    
+    // In development, skip the health check to avoid CORS and 405 errors
+    // Just assume backend is not available unless explicitly configured
+    const isDevelopment = import.meta.env.DEV;
+    if (isDevelopment) {
+      const hasExplicitBackendUrl = import.meta.env.VITE_API_URL && 
+        import.meta.env.VITE_API_URL !== 'http://localhost:5173' &&
+        !import.meta.env.VITE_API_URL.includes('localhost:5173');
+      return hasExplicitBackendUrl;
+    }
+    
+    try {
+      // Try a simple HEAD request to the base API URL to check availability
+      const baseUrl = this.config.endpoint.replace('/security/events', '/health');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
+      
+      const response = await fetch(baseUrl, {
+        method: 'HEAD',
+        mode: 'cors',
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      return response.ok || response.status === 404; // 404 is ok, means server is responding
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Flush events to server
    */
   private async flushEvents(): Promise<void> {
-    if (this.eventQueue.length === 0) return;
+    if (this.eventQueue.length === 0 || !this.config.enabled) return;
+    
+    const isDevelopment = import.meta.env.DEV;
+    
+    // In development, check backend availability first
+    if (isDevelopment) {
+      const isAvailable = await this.checkBackendAvailability();
+      if (!isAvailable) {
+        if (this.config.enableConsoleLogging) {
+          console.info('Security monitoring: Backend not available. Events logged locally only.');
+        }
+        this.eventQueue = []; // Clear the queue to prevent memory buildup
+        return;
+      }
+    }
     
     const events = [...this.eventQueue];
     this.eventQueue = [];
     
     try {
-      await fetch(this.config.endpoint, {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      const response = await fetch(this.config.endpoint, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
+        mode: 'cors',
+        credentials: 'omit',
+        signal: controller.signal,
         body: JSON.stringify({ events })
       });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      if (this.config.enableConsoleLogging && isDevelopment) {
+        console.info(`Security monitoring: Successfully sent ${events.length} events to backend`);
+      }
     } catch (error) {
-      console.error('Failed to send security events:', error);
-      // Re-queue events on failure
-      this.eventQueue.unshift(...events);
+      const isNetworkError = error instanceof TypeError || error.name === 'AbortError';
+      const isCorsError = error instanceof TypeError && error.message.toLowerCase().includes('cors');
+      const isConnectionError = error instanceof Error && (
+        error.message.includes('ERR_CONNECTION_REFUSED') ||
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('Failed to fetch') ||
+        error.message.includes('NetworkError')
+      );
+      
+      // In development, handle backend unavailability gracefully
+      if (isDevelopment && (isNetworkError || isCorsError || isConnectionError)) {
+        if (this.config.enableConsoleLogging) {
+          console.warn('Security monitoring: Backend request failed. Disabling remote monitoring for this session.');
+        }
+        // Disable monitoring for the rest of this session to prevent repeated errors
+        this.config.enabled = false;
+        return;
+      }
+      
+      // For production or unexpected errors, log and re-queue events
+      console.error('Security monitoring: Failed to send events:', error);
+      
+      // Only re-queue a limited number of times to prevent memory buildup
+      if (events.length < 100) {
+        this.eventQueue.unshift(...events);
+      }
     }
   }
 

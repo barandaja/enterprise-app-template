@@ -11,7 +11,7 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  Privacy,
+  Lock,
   FileText,
   Activity,
   Bell,
@@ -43,7 +43,7 @@ const getNavigationItems = (userRole: string): NavItem[] => {
     {
       label: 'Privacy Settings',
       href: '/privacy-settings',
-      icon: Privacy,
+      icon: Lock,
     },
   ];
 

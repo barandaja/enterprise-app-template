@@ -755,7 +755,7 @@ const defaultPreferences: UserPreferences = {
 // MOCK API SERVICE
 // =============================================================================
 
-const preferencesApi = {
+export const preferencesApi = {
   async fetchPreferences(): Promise<UserPreferences> {
     await new Promise(resolve => setTimeout(resolve, 600));
     return defaultPreferences;

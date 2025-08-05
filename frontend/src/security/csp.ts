@@ -18,7 +18,7 @@ export type CSPDirective =
   | 'media-src'
   | 'object-src'
   | 'frame-src'
-  | 'frame-ancestors'
+  // | 'frame-ancestors' // Removed - only works via HTTP headers, not meta tags
   | 'base-uri'
   | 'form-action'
   | 'manifest-src'
@@ -63,6 +63,7 @@ function getApiDomain(): string {
 
 /**
  * Default secure CSP configuration
+ * Note: frame-ancestors is excluded as it only works via HTTP headers, not meta tags
  */
 export const defaultCSPConfig: CSPConfig = {
   directives: {
@@ -75,7 +76,7 @@ export const defaultCSPConfig: CSPConfig = {
     'media-src': ["'self'"],
     'object-src': ["'none'"],
     'frame-src': ["'none'"],
-    'frame-ancestors': ["'none'"],
+    // 'frame-ancestors' removed - only works via HTTP headers, not meta tags
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
     'manifest-src': ["'self'"],
@@ -87,6 +88,7 @@ export const defaultCSPConfig: CSPConfig = {
 
 /**
  * Development CSP configuration (more permissive)
+ * Note: frame-ancestors is excluded as it only works via HTTP headers, not meta tags
  */
 export const developmentCSPConfig: CSPConfig = {
   directives: {
@@ -99,7 +101,7 @@ export const developmentCSPConfig: CSPConfig = {
     'media-src': ["'self'"],
     'object-src': ["'none'"],
     'frame-src': ["'self'"],
-    'frame-ancestors': ["'self'"],
+    // 'frame-ancestors' removed - only works via HTTP headers, not meta tags
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
   },
@@ -245,7 +247,7 @@ export function applyCSPMetaTag(config: CSPConfig = defaultCSPConfig): void {
  * Initialize CSP for the application
  */
 export function initializeCSP(): void {
-  const isDevelopment = process.env.NODE_ENV === 'development';
+  const isDevelopment = import.meta.env?.DEV === true;
   const config = isDevelopment ? developmentCSPConfig : defaultCSPConfig;
   
   // Apply CSP meta tag for SPA
@@ -364,7 +366,7 @@ export const cspPresets = {
       'media-src': ["'none'"],
       'object-src': ["'none'"],
       'frame-src': ["'none'"],
-      'frame-ancestors': ["'none'"],
+      // 'frame-ancestors': ["'none'"], // Only works via HTTP headers, not meta tags
       'base-uri': ["'none'"],
       'form-action': ["'self'"],
     }

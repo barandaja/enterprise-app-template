@@ -33,7 +33,7 @@ class AuditLogFactory(factory.Factory):
         AuditEventType.DATA_UPDATE,
         AuditEventType.DATA_DELETE,
         AuditEventType.PERMISSION_GRANTED,
-        AuditEventType.PERMISSION_REVOKED,
+        AuditEventType.PERMISSION_DENIED,
         AuditEventType.SECURITY_ALERT,
         AuditEventType.SUSPICIOUS_ACTIVITY
     ])
@@ -264,7 +264,7 @@ class ComplianceAuditFactory(AuditLogFactory):
 class SystemAuditFactory(AuditLogFactory):
     """Factory for system-level audit logs."""
     
-    event_type = AuditEventType.SYSTEM_ERROR
+    event_type = AuditEventType.SYSTEM_START
     action = "system_operation"
     resource_type = "system"
     user_id = None  # System events might not have associated users
