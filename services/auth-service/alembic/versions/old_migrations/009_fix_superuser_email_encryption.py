@@ -1,7 +1,7 @@
 """Fix superuser email encryption
 
 Revision ID: 009
-Revises: 008
+Revises: 008_add_missing_audit_enum_values
 Create Date: 2025-08-04 16:52:00.000000
 
 This migration fixes the superuser email field which was incorrectly stored as
@@ -27,7 +27,7 @@ import os
 
 # revision identifiers, used by Alembic.
 revision: str = '009'
-down_revision: Union[str, None] = '008'
+down_revision: Union[str, None] = '008_add_missing_audit_enum_values'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

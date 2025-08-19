@@ -64,6 +64,11 @@ services:
       - SMTP_TLS=false
       - EMAILS_FROM_EMAIL=noreply@enterprise.local
       - EMAILS_FROM_NAME=Enterprise Auth Service
+      - RATE_LIMIT_ENABLED=false
+      - ENABLE_AUDIT_LOGGING=false
+      - ENABLE_DATA_ENCRYPTION=false
+      - ADMIN_EMAIL=admin@example.com
+      - ADMIN_PASSWORD=Admin123!
     ports:
       - "8001:8000"
     volumes:

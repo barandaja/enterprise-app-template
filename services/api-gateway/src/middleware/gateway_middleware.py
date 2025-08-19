@@ -431,6 +431,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             "/health", "/ready", "/docs", "/redoc", "/openapi.json",
             "/auth/login", "/auth/register", "/auth/password-reset", "/auth/csrf",
             "/auth/refresh", "/api/v1/auth/refresh",  # Add refresh to public paths
+            "/api/auth/login", "/api/auth/register", "/api/auth/password-reset",  # Frontend paths
+            "/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/password-reset",  # API v1 paths
             "/security/events", "/api/security/events", 
             settings.get_api_path("security", "events")
         ]

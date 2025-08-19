@@ -362,8 +362,21 @@ def EncryptedField(field_type: str = "string", **kwargs) -> Column:
         **kwargs: SQLAlchemy column arguments (nullable, index, unique, etc.)
     
     Returns:
-        SQLAlchemy Column with appropriate encrypted type
+        SQLAlchemy Column with appropriate encrypted type or regular type based on settings
     """
+    
+    # Check if encryption is enabled
+    if not settings.ENABLE_DATA_ENCRYPTION:
+        # Use regular fields when encryption is disabled
+        from sqlalchemy.dialects.postgresql import JSON
+        if field_type == "string":
+            return Column(String(255), **kwargs)
+        elif field_type == "text":
+            return Column(Text, **kwargs)
+        elif field_type == "json":
+            return Column(JSON, **kwargs)
+        else:
+            raise ValueError(f"Unsupported field type: {field_type}")
     
     # Determine the appropriate encrypted type
     if field_type == "string":
